@@ -257,8 +257,11 @@
   function renderMine() {
     const hist = records.history();
     const fav = records.favs();
+    const resv = reservations();
     const rows = Object.values(hist).sort((a, b) => b.ts - a.ts).slice(0, 12);
     const favs = Object.values(fav).sort((a, b) => b.ts - a.ts).slice(0, 12);
+    const resvs = Object.keys(resv).map((sid) => Object.assign({ id: sid }, resv[sid]))
+      .sort((a, b) => (b.at || 0) - (a.at || 0));
     grid.innerHTML = '';
     status.textContent = '';
     const wrap = el('div', 'mine');
@@ -267,13 +270,18 @@
       <div class="mine-tools">
         <button class="text-btn light" id="clearCacheBtn" title="清空全部观看记录，并清理已缓存的视频">清空历史记录</button>
       </div>
+      <h2>我的预约${resvs.length ? ' <span class="mine-count">' + resvs.length + '</span>' : ''}</h2>
+      <div class="mini-list" id="reserveList">${resvs.length ? '' : '<div class="empty">还没有预约。在剧集详情页点「预约下一季」，下一季上线时首页会提醒你</div>'}</div>
       <h2>继续观看</h2>
-      <div class="mini-list">${rows.length ? '' : '<div class="empty">还没有观看记录</div>'}</div>
+      <div class="mini-list" id="historyList">${rows.length ? '' : '<div class="empty">还没有观看记录</div>'}</div>
       <h2>我的收藏</h2>
-      <div class="mini-list">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>`;
-    const lists = wrap.querySelectorAll('.mini-list');
-    rows.forEach((r) => lists[0].appendChild(miniRow(r, true)));
-    favs.forEach((r) => lists[1].appendChild(miniRow(r, false)));
+      <div class="mini-list" id="favList">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>`;
+    const reserveList = wrap.querySelector('#reserveList');
+    const historyList = wrap.querySelector('#historyList');
+    const favList = wrap.querySelector('#favList');
+    resvs.forEach((r) => reserveList.appendChild(reserveRow(r)));
+    rows.forEach((r) => historyList.appendChild(miniRow(r, true)));
+    favs.forEach((r) => favList.appendChild(miniRow(r, false)));
     grid.appendChild(wrap);
     const cc = $('clearCacheBtn');
     if (cc) {
@@ -339,6 +347,33 @@
         return;
       }
       openDetail(r.id, r);
+    });
+    return node;
+  }
+
+  /** 「我的预约」列表里的一行：点进详情，可取消预约。 */
+  function reserveRow(r) {
+    const node = el('div', 'mini-row reserve-row');
+    const kind = r.kind || '季';
+    const cover = r.cover
+      ? `<img loading="lazy" src="${esc(r.cover)}" alt="">`
+      : `<div class="cover-ph">📅</div>`;
+    node.innerHTML = `${cover}
+      <div class="info">
+        <div class="t">${esc(r.title || '未命名')}</div>
+        <div class="s">已预约第 ${r.num || 1} ${kind}${r.eps ? ' · 共 ' + r.eps + ' 集' : ''} · 上线时提醒你</div>
+      </div>
+      <button class="row-del" aria-label="取消预约" title="取消预约">取消预约</button>`;
+    node.addEventListener('click', (ev) => {
+      if (ev.target.closest('.row-del')) {
+        ev.stopPropagation();
+        cancelReservation(r.id);
+        syncReserveBtn();
+        toast('已取消预约');
+        renderMine();
+        return;
+      }
+      openDetail(r.id, { id: r.id, title: r.title, cover: r.cover });
     });
     return node;
   }
@@ -491,11 +526,15 @@
   /* ---------------- 详情 ---------------- */
   const detailPage = $('detailPage');
   let detail = { seriesId: '', meta: null, episodes: [] };
+  let detailNext = null;        // 当前详情页检测到的下一季；null = 没有/未检测
+  let detailNextToken = 0;      // 竞态 token：切剧后丢弃旧的异步检测结果
 
   async function openDetail(seriesId, seed, keepHash) {
     if (!seriesId) return;
     if (!keepHash) history.replaceState(null, '', '#/d/' + seriesId);
     detail = { seriesId, meta: null, episodes: [] };
+    detailNext = null;              // 切剧先清掉上一部的下一季状态
+    detailNextToken += 1;           // 让上一部未完成的探测结果作废
     detailPage.hidden = false;
     // 详情页自己是 fixed 全屏滚动容器，必须锁住 body，
     // 否则首页那条滚动条会留在最右边，出现两条滑轨（外侧那条还拖不动）
@@ -536,6 +575,7 @@
       renderEpisodes();
       syncFavBtn();
       syncReserveBtn();
+      probeDetailNext(seriesId);    // 有下一季就把按钮升级成「看第X季 →」
       // 打开详情页就把「大概率要点的那一集」丢给后端预取（有观看记录则续播那集，
       // 否则第 1 集）：等用户真去点播放时缓存多半已经就绪，首播不用再等解密。
       // 后端有并发去重与缓存，重复进详情页不会重复下载。
@@ -572,9 +612,38 @@
   function syncReserveBtn() {
     const btn = $('reserveBtn');
     if (!btn) return;
+    // 已经找到下一季：按钮变成「看第X季 →」，不再误导用户去预约一个已存在的季
+    if (detailNext) {
+      const s = parseSeason(String((detailNext.title || '')));
+      const label = s ? ('看第' + s.num + (s.kind === '部' ? '部' : '季')) : '看下一季';
+      btn.textContent = label + ' →';
+      btn.classList.remove('ghost', 'on');
+      btn.classList.add('primary');
+      btn.title = detailNext.title || '';
+      return;
+    }
+    // 没找到下一季：原来的预约开关
+    btn.classList.remove('primary');
+    btn.classList.add('ghost');
+    btn.removeAttribute('title');
     const on = isReserved(detail.seriesId);
     btn.textContent = on ? '已预约✓' : '预约下一季';
     btn.classList.toggle('on', on);
+  }
+
+  /**
+   * 详情页打开后探测下一季，把「预约下一季」升级成「看第X季 →」。
+   * 复用 lookupNextSeason 的缓存/去重，不额外打接口；切剧后用 token 丢弃旧结果。
+   */
+  function probeDetailNext(sid) {
+    const token = ++detailNextToken;
+    detailNext = null;
+    syncReserveBtn();
+    lookupNextSeason(false).then((r) => {
+      if (token !== detailNextToken || detail.seriesId !== sid) return;
+      detailNext = r.next || null;
+      syncReserveBtn();
+    }).catch(() => { /* 查不到就维持预约按钮，不影响主流程 */ });
   }
 
   /* ---------------- 播放器 ---------------- */
@@ -1095,8 +1164,11 @@
     if (old && old.num === cur.num) return false;   // 已预约过这一季
     all[seriesId] = {
       title: String((meta && meta.title) || ''),
+      cover: String((meta && meta.cover) || ''),
+      eps: Number((meta && meta.episode_cnt) || 0) || 0,
       base: cur.base,
       num: cur.num,
+      kind: cur.kind || '季',
       at: Date.now(),
       notifiedNum: old ? old.notifiedNum : 0
     };
@@ -1959,6 +2031,15 @@
     syncFavBtn();
   });
   $('reserveBtn').addEventListener('click', () => {
+    // 已检测到下一季：直接跳过去播第 1 集（和看完最后一集的「看下一季」同一行为）
+    if (detailNext) {
+      const next = detailNext;
+      hideNextSeason();
+      closePlayer();
+      openDetail(next.id, next).then(() => playEpisode(1));
+      return;
+    }
+    // 没有下一季：预约开关
     if (isReserved(detail.seriesId)) {
       cancelReservation(detail.seriesId);
       toast('已取消预约');
