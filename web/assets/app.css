@@ -153,6 +153,187 @@ main { padding: 0 12px; }
 }
 .card .sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ---------- 首页沉浸式背景 Hero（借鉴 hongguo-desktop）----------
+   封面图铺在页面顶部作背景、向下 mask 渐隐融进页面底色；
+   文案浮在图上（左下），双层 scrim 保证可读，选中图缓慢 Ken Burns 放大。 */
+/* 文案层占文档流高度，把分区推开；图片/遮罩层 fixed 铺在页面顶部当背景。
+   仅在 body.hero-bg-view（首页 index）时启用，其余视图不受影响。 */
+.home-hero-bg, .hero-scrim, .hero-copy, .hero-dots { display: none; }
+body.hero-bg-view .home-hero-bg,
+body.hero-bg-view .hero-scrim,
+body.hero-bg-view .hero-copy,
+body.hero-bg-view .hero-dots { display: flex; }
+body.hero-bg-view .home-hero-bg,
+body.hero-bg-view .hero-scrim { display: block; }
+/* 照搬对方：顶栏/tab 只去掉底色让背景透上来，文字/图标/品牌名样式一律不动 */
+body.hero-bg-view .topbar { background: transparent; backdrop-filter: none; border-bottom: 0; }
+body.hero-bg-view .tabs { background: transparent; }
+/* 背景视图下未选中 tab 与题材 chips/封面标题同源：文字 var(--text)、底色 var(--active)，随主题自动切换 */
+body.hero-bg-view .tab:not(.active) {
+  color: var(--text);
+  background: transparent;
+  text-shadow: var(--on-poster-shadow);
+}
+:root { --on-poster-shadow: 0 1px 4px rgba(0,0,0,.65); }
+html[data-theme="light"] { --on-poster-shadow: 0 0 3px rgba(255,255,255,.7), 0 1px 5px rgba(255,255,255,.5); }
+/* 品牌渐变字/图标压在深色海报上保持亮色（品牌标识不改） */
+body.hero-bg-view .topbar .icon-btn { color: #fff; }
+body.hero-bg-view .version-tag { color: rgba(255,255,255,.85); background: rgba(0,0,0,.24); border-color: transparent; }
+
+.hero-banner {
+  position: relative; width: 100%; margin: 0 0 2px;
+  height: 272px; overflow: visible;
+}
+/* 分类页只有背景图、无文案/按钮/指示点：占位压到最低，题材 chips 紧跟 tab */
+body.hero-bg-only .hero-banner { height: 60px; }
+body.hero-bg-only .hero-copy,
+body.hero-bg-only .hero-dots { display: none !important; }
+/* 背景渐隐在 chips 下方（约 220px）结束，中间是背景图而非白底空白 */
+body.hero-bg-only .hero-slide img,
+body.hero-bg-only .hero-scrim {
+  -webkit-mask-image: linear-gradient(to bottom,
+    #000 0%, rgba(0,0,0,.92) 26%, rgba(0,0,0,.55) 40%,
+    rgba(0,0,0,.18) 48%, transparent 52%);
+  mask-image: linear-gradient(to bottom,
+    #000 0%, rgba(0,0,0,.92) 26%, rgba(0,0,0,.55) 40%,
+    rgba(0,0,0,.18) 48%, transparent 52%);
+}
+/* 背景层铺满整列(含顶栏背后)固定在底层，不随内容滚动——照搬 hongguo-desktop 的 .hero-layer */
+.home-hero-bg {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: calc(430px + var(--safe-top));
+  z-index: 0; pointer-events: none; overflow: hidden;
+}
+.hero-slide {
+  position: absolute; inset: 0; opacity: 0; transition: opacity .8s ease;
+  cursor: pointer;
+}
+.hero-slide.on { opacity: 1; }
+.hero-slide img {
+  width: 100%; height: 100%; object-fit: cover; object-position: center 24%;
+  transform: scale(1.04); display: block;
+  /* 顶部完整、向下快速化进页面底色（对齐对方项目曲线） */
+  -webkit-mask-image: linear-gradient(to bottom,
+    #000 0%, rgba(0,0,0,.96) 12%, rgba(0,0,0,.82) 30%,
+    rgba(0,0,0,.55) 50%, rgba(0,0,0,.22) 72%, transparent 90%);
+  mask-image: linear-gradient(to bottom,
+    #000 0%, rgba(0,0,0,.96) 12%, rgba(0,0,0,.82) 30%,
+    rgba(0,0,0,.55) 50%, rgba(0,0,0,.22) 72%, transparent 90%);
+}
+.hero-slide.on img { animation: heroKenBurns 9s ease-out both; }
+@keyframes heroKenBurns { from { transform: scale(1.02); } to { transform: scale(1.1); } }
+/* 顶部压暗（顶栏图标可读）+ 底部左侧压暗（文案可读） */
+.hero-scrim {
+  position: fixed; top: 0; left: 0; right: 0;
+  height: calc(430px + var(--safe-top)); z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(to bottom, rgba(0,0,0,.55) 0%, rgba(0,0,0,.22) 6%, transparent 15%),
+    linear-gradient(100deg, rgba(0,0,0,.6) 0%, rgba(0,0,0,.3) 28%, transparent 60%);
+  /* 关键：和封面图用同一条渐隐曲线，避免 scrim 到 430px 硬切断出现水平分割线 */
+  -webkit-mask-image: linear-gradient(to bottom,
+    #000 0%, rgba(0,0,0,.96) 12%, rgba(0,0,0,.82) 30%,
+    rgba(0,0,0,.55) 50%, rgba(0,0,0,.22) 72%, transparent 90%);
+  mask-image: linear-gradient(to bottom,
+    #000 0%, rgba(0,0,0,.96) 12%, rgba(0,0,0,.82) 30%,
+    rgba(0,0,0,.55) 50%, rgba(0,0,0,.22) 72%, transparent 90%);
+}
+.hero-copy {
+  position: absolute; left: 4px; right: 16px;
+  top: 26px; z-index: 2;
+  display: flex; flex-direction: column; align-items: flex-start;
+  color: #fff; pointer-events: none;
+}
+.hero-chip {
+  align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  padding: 3px 10px; border-radius: 8px; margin-bottom: 8px;
+  background: var(--accent); color: #fff;
+}
+.hero-copy h2 {
+  margin: 0; font-size: clamp(20px, 5.4vw, 30px); line-height: 1.25; font-weight: 800;
+  max-width: 88%;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  text-shadow: 0 2px 12px rgba(0,0,0,.7);
+}
+.hero-copy .hero-meta {
+  margin-top: 8px; font-size: 12.5px; color: rgba(255,255,255,.82);
+  text-shadow: 0 1px 8px rgba(0,0,0,.7); display: block;
+}
+.hero-play {
+  pointer-events: auto; align-self: flex-start; margin-top: 12px;
+  border: 0; border-radius: 999px; padding: 9px 20px;
+  font-size: 13px; font-weight: 700; color: #fff; background: var(--accent);
+  box-shadow: 0 4px 16px rgba(255,45,85,.45);
+}
+.hero-dots {
+  position: absolute; right: 16px; z-index: 3;
+  top: 232px;
+  display: flex; gap: 6px;
+}
+.hero-dots i {
+  width: 6px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.35);
+  transition: width .25s, background .25s;
+}
+.hero-dots i.on { width: 18px; background: var(--accent); }
+
+/* ---------- 分区横滑轨道 ---------- */
+.home-section { margin: 6px 0 14px; }
+.home-section .sec-title {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 10px 2px 9px;
+}
+.home-section .sec-title h2 { margin: 0; font-size: 16px; font-weight: 800; }
+.home-section .sec-title .more {
+  font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.home-section .sec-title .more::after { content: ' ›'; }
+/* 宽屏：一行等分铺满，卡片完整不裁切；窄屏：横滑，固定卡片宽度 */
+.hrow {
+  display: flex; gap: 10px; padding: 2px 2px 4px;
+  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.hrow::-webkit-scrollbar { display: none; }
+.hcard { flex: 0 0 auto; width: 30%; cursor: pointer; }
+.hcard .thumb {
+  position: relative; width: 100%; aspect-ratio: 3 / 4;
+  border-radius: 10px; overflow: hidden; background: var(--bg-soft);
+}
+@media (min-width: 640px) {
+  .hrow { overflow-x: visible; }
+  .hcard { flex: 1 1 0; width: auto; min-width: 0; }
+}
+.hcard .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.hcard .ep-tag {
+  position: absolute; right: 6px; bottom: 6px; padding: 2px 6px; border-radius: 6px;
+  font-size: 10px; background: rgba(0,0,0,.62); color: #fff;
+}
+.hcard .name {
+  margin-top: 6px; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ---------- 题材筛选 chips ---------- */
+.topic-bar {
+  display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 2px 12px;
+}
+.topic-bar[hidden] { display: none; }
+.topic-chip {
+  border: 0; cursor: pointer; border-radius: 999px;
+  padding: 7px 13px; font-size: 12.5px; font-weight: 600;
+  background: var(--bg-soft); color: var(--muted);
+  transition: background .15s, color .15s;
+}
+.topic-chip.active { background: var(--accent); color: #fff; }
+/* 题材 chips 与封面标题同源：文字 var(--text)、底色 var(--active)，随明暗主题自动切换 */
+body.hero-bg-view .topic-chip {
+  background: transparent;
+  color: var(--text);
+  text-shadow: none;
+  padding-left: 6px; padding-right: 6px;
+}
+body.hero-bg-view .topic-chip.active {
+  background: var(--accent); color: #fff;
+}
+
 .list-status { text-align: center; color: var(--muted); font-size: 13px; padding: 22px 0 30px; }
 .sentinel { height: 1px; }
 
@@ -303,6 +484,43 @@ html[data-theme="light"] .season-list .season-item { background: #fff; box-shado
   flex: 0 0 auto; font-size: 12px; color: var(--accent);
   padding: 6px 10px; border-radius: 8px; background: var(--accent-soft);
 }
+
+/* ---------- 设置分组（弹幕调节） ---------- */
+.settings-card {
+  border-radius: 12px; background: var(--bg-soft);
+  padding: 4px 12px; margin-top: 4px;
+}
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 0; border-bottom: 1px solid var(--line);
+}
+.setting-row:last-child { border-bottom: 0; }
+.setting-row .label { font-size: 13.5px; font-weight: 600; }
+.setting-row .hint { margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+.setting-seg { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.setting-seg button {
+  border: 0; cursor: pointer; border-radius: 8px;
+  padding: 6px 11px; font-size: 12px; font-weight: 600;
+  background: var(--active); color: var(--muted);
+}
+.setting-seg button.on { background: var(--accent); color: #fff; }
+.setting-range { display: flex; align-items: center; gap: 8px; }
+.setting-range input {
+  width: 120px; accent-color: var(--accent); cursor: pointer;
+}
+.setting-range .val { min-width: 38px; text-align: right; font-size: 12px; color: var(--muted); }
+.setting-switch {
+  position: relative; width: 42px; height: 24px; flex: 0 0 auto;
+  border: 0; border-radius: 999px; cursor: pointer; background: var(--line);
+  transition: background .2s;
+}
+.setting-switch::after {
+  content: ''; position: absolute; left: 3px; top: 3px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.setting-switch.on { background: var(--accent); }
+.setting-switch.on::after { transform: translateX(18px); }
 
 /* ---------- 播放器 ---------- */
 .player { position: fixed; inset: 0; z-index: 90; background: #000; }
@@ -532,7 +750,7 @@ html[data-theme="light"] .skeleton { box-shadow: inset 0 0 0 1px var(--line); }
 .player, .player * { color-scheme: dark; }
 
 /* ==================== 三端自适应 ==================== */
-main { max-width: 1440px; margin: 0 auto; }
+main { max-width: 1440px; margin: 0 auto; position: relative; }
 
 /* 平板 520–1023 */
 @media (min-width: 520px) and (max-width: 1023px) {

@@ -32,10 +32,10 @@ const PlaybackDevice = require('./playback-device');
  * multi_video_model/player/v1 + v5 Medusa/Helios/Khronos 签名，
  * 见 core/pure-sign.js 的 signPlaybackV5（上游参考 N3urda/hongguoTV 0.16.5）。
  */
-const VIDEO_API = 'https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1';
-
-/** 接口主机（自检与排障用）。 */
 const VIDEO_API_HOST = 'api5-normal-sinfonlinea.fqnovel.com';
+/** 备用域名：上游 0.16.13 用同一身份在 b 域名重查当前集，拿可解码档位。 */
+const VIDEO_API_HOST_ALT = 'api5-normal-sinfonlineb.fqnovel.com';
+const VIDEO_API = 'https://' + VIDEO_API_HOST + '/novel/player/multi_video_model/player/v1';
 
 /**
  * 官方 App 现行的单集取址：GET video_tab。
@@ -47,10 +47,9 @@ const VIDEO_API_HOST = 'api5-normal-sinfonlinea.fqnovel.com';
  */
 const VIDEO_TAB_API = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/';
 
-/** GET 取址的 query：客户端版本必须跟上上游现行 APK（7.4.3.32 / 74332）。
- *  2026-11-23 实测：旧的 73932/7.3.9.32 会返回 HTTP 200 空体；
- *  对齐上游 N3urda/hongguoTV 0.16.12 的 videoTabRequest 参数后恢复。
- *  注意 UA 仍保持 73932（上游 GET 的 UA 与 query 版本故意不一致）。 */
+/** GET 取址的 query 前缀。
+ *  顺序按上游 N3urda/hongguoTV 0.16.12 MobilePlayback.query() 逐字对齐：
+ *  身份字段（iid/cdid/device_id）在分集字段之前，_rticket 由签名器最后追加。 */
 const VIDEO_TAB_QUERY = {
   aid: '8662',
   app_name: 'novelread',
@@ -61,6 +60,10 @@ const VIDEO_TAB_QUERY = {
   device_type: 'PGT-AN10',
   os_version: '12',
   update_version_code: '74332',
+};
+
+/** GET 取址的分集参数，顺序同样对齐 videoTabRequest()。 */
+const VIDEO_TAB_EXTRA = {
   video_id_type: '0',
   device_level: '1',
   need_all_video_definition: '1',
@@ -71,9 +74,9 @@ const VIDEO_TAB_QUERY = {
   from_video_id: '',
 };
 
-/** GET 取址的 UA：版本号与 VIDEO_TAB_QUERY 保持一致。 */
-const VIDEO_TAB_UA = 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; '
-  + 'Build/V417IR;tt-ok/3.12.13.20)';
+/** GET 取址的 UA：上游 video_tab 专用 UA（与 POST 的 VIDEO_UA 不同）。 */
+const VIDEO_TAB_UA = 'com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; '
+  + 'Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 
 /** 播放请求 UA：必须与 query 里的版本/机型参数同源（7.4.3.32 / PGT-AN10 / Android 12）。 */
 const VIDEO_UA = 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; '
@@ -260,16 +263,57 @@ async function pickFastest(cands, trace) {
  * @returns {Promise<{rows: Row[], seed: Buffer|null}>}
  */
 async function loadModel(vid, trace) {
-  let model = null;
+  const hasPlayable = (parsed) => parsed !== null
+    && parsed.rows.length > 0 && !allBytevc2(parsed.rows);
+  let tabModel = null;
+  let tabError = null;
   try {
-    model = await fetchVideoTabModel(vid, trace);
+    tabModel = await fetchVideoTabModel(vid, trace);
   } catch (e) {
-    // 上游 POST 空包期只有这条 GET 可用；GET 失败不能吞掉 POST 的兜底机会
+    // GET 空包不能吞掉 POST 兜底机会
+    tabError = e;
     if (trace !== null && trace !== undefined) {
       trace.tabError = String((e && e.message) || e);
     }
   }
-  if (model === null) model = await loadModelPost(vid, trace);
+
+  if (tabModel !== null) {
+    let tabParsed = null;
+    try {
+      tabParsed = await rowsFromModel(tabModel, trace);
+    } catch (e) {
+      tabError = e;
+      if (trace !== null && trace !== undefined) {
+        trace.tabRowsError = String((e && e.message) || e);
+      }
+    }
+    if (hasPlayable(tabParsed)) return tabParsed;
+
+    // 上游 0.16.13：tab 模型存在但只有 bytevc2（电视/浏览器不可解码）时，
+    // 复用同一身份在备用域名 b 重查 player/v1，拿 bytevc1/1080p 兼容档。
+    if (trace !== null && trace !== undefined) {
+      trace.tabNoCompatible = {
+        rows: tabParsed === null ? 0 : tabParsed.rows.length,
+        alternateHost: VIDEO_API_HOST_ALT,
+      };
+    }
+    try {
+      const altModel = await loadModelPost(vid, trace, VIDEO_API_HOST_ALT);
+      const altParsed = await rowsFromModel(altModel, trace);
+      if (hasPlayable(altParsed)) return altParsed;
+      if (tabParsed !== null) return tabParsed;
+      tabError = new Error('备用域名仍未提供可播档位');
+    } catch (e) {
+      if (trace !== null && trace !== undefined) {
+        trace.alternateModelError = String((e && e.message) || e);
+      }
+      if (tabParsed !== null) return tabParsed;
+      tabError = e;
+    }
+    throw tabError || new Error('App 接口未提供可播档位');
+  }
+
+  const model = await loadModelPost(vid, trace, VIDEO_API_HOST);
   return rowsFromModel(model, trace);
 }
 
@@ -286,10 +330,10 @@ async function fetchVideoTabModel(vid, trace) {
     trace.identity = { device_id: identity.device_id, iid: identity.iid, cdid: identity.cdid };
     trace.attempts = [];
   }
+  // 顺序即签名输入：base → 身份 → 分集 → 播放参数 → _rticket（签名器追加）
   const values = Object.assign({}, VIDEO_TAB_QUERY, {
-    video_id: vid,
     iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
-  });
+  }, { video_id: vid }, VIDEO_TAB_EXTRA);
   const tSign = Date.now();
   // GET video_tab：上游要求用「空字节体」签名（md5(空)），不是 null 的全零摘要。
   // 传空 Buffer 让 bodyMd5Of 走 md5(空)；x-ss-stub 因 body 长度为 0 不会被设置。
@@ -304,7 +348,11 @@ async function fetchVideoTabModel(vid, trace) {
   const tReq = Date.now();
   const res = await Http.send({
     url: signed.url, method: 'GET', timeoutMs: 15000,
-    headers: Object.assign({ 'User-Agent': VIDEO_TAB_UA, Accept: 'application/json' }, signed.headers),
+    headers: Object.assign({
+      'User-Agent': VIDEO_TAB_UA,
+      Accept: 'application/json; charset=utf-8',
+      'Accept-Language': 'zh-CN,zh;q=0.9',
+    }, signed.headers),
   });
   attemptInfo.httpMs = Date.now() - tReq;
   attemptInfo.status = res.status;
@@ -345,13 +393,13 @@ async function fetchVideoTabModel(vid, trace) {
 }
 
 /** 旧的签名 POST 链路（上游空包时不可用，作为兜底保留）。 */
-async function loadModelPost(vid, trace) {
+async function loadModelPost(vid, trace, host) {
   const body = zlib.gzipSync(Buffer.from(Json.stringify(payload(vid)), 'utf8'));
   if (trace !== null && trace !== undefined) {
     trace.bodyBytes = body.length;
     trace.payload = Json.stringify(payload(vid));
   }
-  const j = await postPlayback(body, trace);
+  const j = await postPlayback(body, trace, host);
   const data = Json.optObj(j.data);
   if (trace !== null && trace !== undefined) {
     trace.dataKeys = data === null ? [] : Object.keys(data);
@@ -377,7 +425,10 @@ async function loadModelPost(vid, trace) {
   if (isEmpty(model)) {
     throw new Error('App 接口未返回 video_model');
   }
-  if (trace !== null && trace !== undefined) trace.route = 'post';
+  if (trace !== null && trace !== undefined) {
+    trace.route = 'post';
+    trace.postHost = host || VIDEO_API_HOST;
+  }
   return model;
 }
 
@@ -531,7 +582,8 @@ async function listCandidates(vid) {
 function payload(vid) {
   const biz = Json.obj();
   biz.detail_page_version = 0;
-  biz.device_level = 3;
+  // 上游 0.16.13：level 3 可能只给 bytevc2，level 1 才会协商出电视/浏览器可解码档
+  biz.device_level = 1;
   biz.disable_digg_stat = false;
   biz.disable_video_relate_book = false;
   biz.need_all_video_definition = true;
@@ -558,20 +610,23 @@ function payload(vid) {
  *  - _rticket 由签名器抖动到「iv & 15 == 12」的分支后再签名；
  *  - 上游若仍返回空 data（身份被拒），换新设备身份重试一次。
  */
-async function postPlayback(body, trace) {
+async function postPlayback(body, trace, host) {
+  const api = 'https://' + (host || VIDEO_API_HOST)
+    + '/novel/player/multi_video_model/player/v1';
   const tReg = Date.now();
   let identity = await PlaybackDevice.getPlaybackDevice();
   if (trace !== null && trace !== undefined) {
     trace.registerMs = Date.now() - tReg;
     trace.identity = { device_id: identity.device_id, iid: identity.iid, cdid: identity.cdid };
-    trace.attempts = [];
+    // 可能前面已经跑过 video_tab，保留它的诊断记录
+    if (!Array.isArray(trace.attempts)) trace.attempts = [];
   }
   for (let attempt = 0; attempt < 2; attempt++) {
     const values = Object.assign({}, PLAYBACK_QUERY, {
       iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
     });
     const tSign = Date.now();
-    const signed = PureSign.signPlaybackV5(VIDEO_API, values, body, Date.now());
+    const signed = PureSign.signPlaybackV5(api, values, body, Date.now());
     const headers = Object.assign({
       'User-Agent': VIDEO_UA,
       Accept: 'application/json',
@@ -918,48 +973,7 @@ function isTransient(e) {
   return /未返回 data|HTTP \d+|暂未提供本集播放信息|接口未返回所选分集|timeout|timed out|ECONN|ETIMEDOUT|socket hang up|fetch failed|network/i.test(m);
 }
 
-/**
- * 官网完整播放信息兜底。
- *
- * 2026-11-23 上游 App 取址接口对几乎所有请求返回 HTTP 200 空体（连官方参考实现
- * 和上游作者本人都无法修复，见 hongguoTV issue #96/#102）。官网网页播放器仍能播，
- * 它走的是 POST /api/video/protected/fallback-play-info（body: {item_id: vid}），
- * 返回完整视频的 CDN 直链（字节 qznovelvod，H.264、无加密、支持 Range）。
- *
- * 注意：官网另有 /video/public/{vid}/360p.mp4，但**只有 10 秒试看**，不能用。
- * 这个接口给的是完整集（实测 170 秒整），取址接口全挂时用它兜底。
- */
-const WEB_PLAY_INFO_API = 'https://hongguoduanju.com/api/video/protected/fallback-play-info?aid=8662';
-const WEB_PROBE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
-
-async function webPlayInfo(vid) {
-  const v = String(vid || '');
-  if (!/^\d{1,30}$/.test(v)) return null;
-  try {
-    const res = await Http.send({
-      url: WEB_PLAY_INFO_API, method: 'POST', timeoutMs: 12000,
-      headers: {
-        'User-Agent': WEB_PROBE_UA,
-        'Content-Type': 'application/json',
-        Referer: 'https://hongguoduanju.com/',
-      },
-      body: Buffer.from(JSON.stringify({ item_id: v })),
-    });
-    if (res.status !== 200) return null;
-    const j = Json.parseObject(res.text());
-    if (j === null) return null;
-    const status = j.base_resp ? Json.optInt(j.base_resp.StatusCode, 0) : 0;
-    if (status !== 0) return null;
-    const url = Json.optStr(j.main_url, '');
-    if (url === '') return null;
-    return {
-      url, spadeA: '', encrypt: false, definition: '官网', size: 0, web: true,
-      expireAt: Json.optLong(j.url_expire, 0),
-    };
-  } catch (e) {
-    return null;
-  }
-}
+// 官网低清兜底已按用户要求移除：取址失败时直接报错，不再静默回退 360p/网页低清源。
 
 /** 单次取址 + 瞬时故障快速重试。 */
 async function fetchWithRetry(vid, quality, priority) {
@@ -1020,21 +1034,7 @@ async function drain() {
 function fetch(vid, quality, priority) {
   return new Promise((resolve, reject) => {
     queue.push({
-      fn: async () => {
-        try {
-          return await fetchWithRetry(vid, quality, priority);
-        } catch (e) {
-          // App 取址彻底失败 → 官网公开直链兜底（H.264、无加密、可直出）
-          const web = await webPlayInfo(vid);
-          if (web !== null) {
-            if (priority !== 'low') {
-              Log.info('取址接口不可用，已回退官网播放信息 ' + vid);
-            }
-            return web;
-          }
-          throw e;
-        }
-      },
+      fn: async () => fetchWithRetry(vid, quality, priority),
       priority: priority === 'low' ? 0 : 1,
       seq: ++seq,
       resolve,
@@ -1076,7 +1076,6 @@ async function diagnose(vid, quality) {
 module.exports = {
   fetch,
   fetchRaw,
-  webPlayInfo,
   loadModel,
   listCandidates,
   diagnose,
@@ -1090,6 +1089,7 @@ module.exports = {
   checkedUrl,
   VIDEO_API,
   VIDEO_API_HOST,
+  VIDEO_API_HOST_ALT,
   VIDEO_TAB_API,
   VIDEO_UA,
   VIDEO_TAB_UA,

@@ -144,6 +144,177 @@
   /* ---------------- 首页 ---------------- */
   const home = { view: 'hot', page: 0, loading: false, done: false, items: [] };
   const grid = $('grid'), status = $('status'), sentinel = $('sentinel');
+  const homeHero = $('homeHero'), homeSections = $('homeSections'), topicBar = $('topicBar');
+  let homeFeedGen = 0;      // 首页增强区的代际，切 tab 时作废旧请求
+  let bannerTimer = 0;      // Banner 自动轮播定时器
+
+  /* 把上游条目数组归一成统一结构（Banner / 横滑轨道用） */
+  function toCards(items) {
+    return (Array.isArray(items) ? items : []).map(normalize).filter((d) => d.id && d.title);
+  }
+
+  /* 沉浸式背景 Banner：图片作页面顶部背景（向下 mask 渐隐），文案浮在图上。
+     图片层与文案层分离，切换时两层同步；5 秒自动轮播、悬停暂停、指示点可点。 */
+  function renderBanner(host, cards, bgOnly) {
+    clearInterval(bannerTimer);
+    if (!host) return;
+    if (!cards.length) { host.innerHTML = ''; return; }
+    document.body.classList.add('hero-bg-view');
+    // 分类页只铺背景图，不要文案/标签/立即观看/指示点（bgOnly）
+    if (bgOnly) document.body.classList.add('hero-bg-only');
+    else document.body.classList.remove('hero-bg-only');
+    const box = el('div', 'hero-banner');
+    // 背景层：各 slide 的封面图（带渐隐 mask）
+    const bg = el('div', 'home-hero-bg');
+    bg.innerHTML = cards.map((d, i) => `
+      <div class="hero-slide${i === 0 ? ' on' : ''}" data-i="${i}">
+        ${d.cover ? `<img loading="${i === 0 ? 'eager' : 'lazy'}" src="${esc(d.cover)}" alt="">` : ''}
+      </div>`).join('');
+    box.appendChild(bg);
+    box.appendChild(el('div', 'hero-scrim'));
+    let copy = null, dots = [], chip = null, title = null, meta = null;
+    if (!bgOnly) {
+      // 遮罩层 + 文案层（文案随轮播切换，避免每张图重复一份）
+      copy = el('div', 'hero-copy');
+      copy.innerHTML = `
+        <span class="hero-chip"></span>
+        <h2></h2>
+        <div class="hero-meta"></div>
+        <button class="hero-play">▶ 立即观看</button>`;
+      box.appendChild(copy);
+      box.insertAdjacentHTML('beforeend',
+        `<div class="hero-dots">${cards.map((_, i) => `<i class="${i === 0 ? 'on' : ''}"></i>`).join('')}</div>`);
+      dots = [...box.querySelectorAll('.hero-dots i')];
+      chip = copy.querySelector('.hero-chip');
+      title = copy.querySelector('h2');
+      meta = copy.querySelector('.hero-meta');
+    }
+    host.innerHTML = '';
+    host.appendChild(box);
+    const slides = [...bg.querySelectorAll('.hero-slide')];
+    let idx = 0, paused = false;
+    const go = (n) => {
+      idx = ((n % cards.length) + cards.length) % cards.length;
+      const d = cards[idx];
+      slides.forEach((s, i) => s.classList.toggle('on', i === idx));
+      if (!bgOnly) {
+        dots.forEach((x, i) => x.classList.toggle('on', i === idx));
+        chip.textContent = idx === 0 ? '重磅推荐' : '热播';
+        title.textContent = d.title;
+        meta.textContent = (d.eps ? '全 ' + d.eps + ' 集' : '')
+          + (d.score ? (d.eps ? ' · ' : '') + esc(d.score) + ' 分' : '');
+      }
+    };
+    go(0);
+    if (!bgOnly) {
+      // 整块可点进详情；指示点单独处理不冒泡
+      box.addEventListener('click', (e) => {
+        if (e.target.closest('.hero-dots')) return;
+        openDetail(cards[idx].id, cards[idx]);
+      });
+      dots.forEach((d, i) => d.addEventListener('click', (e) => { e.stopPropagation(); go(i); }));
+    }
+    box.addEventListener('mouseenter', () => { paused = true; });
+    box.addEventListener('mouseleave', () => { paused = false; });
+    bannerTimer = setInterval(() => { if (!paused && player.hidden) go(idx + 1); }, 5000);
+  }
+
+  /* 分区横滑轨道：标题 + 可横向滑动的卡片行，「查看更多」切到对应分类 tab */
+  function renderRow(name, arg, cards) {
+    if (!cards.length) return null;
+    const sec = el('div', 'home-section');
+    const title = el('div', 'sec-title');
+    title.innerHTML = `<h2>${esc(name)}</h2><span class="more" data-arg="${esc(arg)}">查看更多</span>`;
+    const row = el('div', 'hrow');
+    cards.forEach((d) => {
+      const c = el('div', 'hcard');
+      c.innerHTML = `
+        <div class="thumb">
+          ${d.cover ? `<img loading="lazy" src="${esc(d.cover)}" alt="">` : ''}
+          ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
+        </div>
+        <div class="name">${esc(d.title)}</div>`;
+      c.addEventListener('click', () => openDetail(d.id, d));
+      row.appendChild(c);
+    });
+    title.querySelector('.more').addEventListener('click', () => switchTab(arg));
+    sec.appendChild(title);
+    sec.appendChild(row);
+    return sec;
+  }
+
+  /* 首页增强区：Banner（热播榜前 6）+ 真人剧 / AI漫剧 / AI短剧 三条横滑轨道。
+     与主榜单 grid 并行渲染，失败也不影响下方列表。 */
+  async function renderHomeFeed(gen) {
+    if (!homeHero || !homeSections) return;
+    try {
+      const [rank, real, comic, ai] = await Promise.all([
+        api('/rank', { board: 'hot', limit: 6 }).catch(() => null),
+        api('/catalog', { channel: 'real', page: 1 }).catch(() => null),
+        api('/catalog', { channel: 'comic', page: 1 }).catch(() => null),
+        api('/catalog', { channel: 'ai', page: 1 }).catch(() => null),
+      ]);
+      if (gen !== homeFeedGen) return;   // 期间切走了视图
+      renderBanner(homeHero, toCards(rank && rank.items));
+      homeSections.innerHTML = '';
+      [
+        ['真人剧', 'real', real],
+        ['AI漫剧', 'comic', comic],
+        ['AI短剧', 'ai', ai],
+      ].forEach(([name, arg, data]) => {
+        const row = renderRow(name, arg, toCards(data && data.items).slice(0, 10));
+        if (row) homeSections.appendChild(row);
+      });
+    } catch (e) {
+      // 首页增强失败静默降级，主榜单仍可正常浏览
+    }
+  }
+
+  function clearHomeExtras() {
+    clearInterval(bannerTimer);
+    document.body.classList.remove('hero-bg-view', 'hero-bg-only');
+    if (homeHero) homeHero.innerHTML = '';
+    if (homeSections) homeSections.innerHTML = '';
+    if (topicBar) { topicBar.innerHTML = ''; topicBar.hidden = true; }
+  }
+
+  /* 题材筛选 chips：从当前分类已加载的卡片 tags 聚合高频题材，前端过滤（不额外请求） */
+  function renderTopicBar() {
+    if (!topicBar) return;
+    if (home.view === 'index' || home.view === 'hot' || home.view === 'mine') {
+      topicBar.innerHTML = ''; topicBar.hidden = true; return;
+    }
+    const counts = {};
+    home.items.forEach((d) => {
+      const tags = Array.isArray(d.tags) ? d.tags : (d.tags ? String(d.tags).split(/[,，/]/) : []);
+      tags.forEach((t) => { t = String(t).trim(); if (t) counts[t] = (counts[t] || 0) + 1; });
+    });
+    const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 12);
+    if (!top.length) { topicBar.innerHTML = ''; topicBar.hidden = true; return; }
+    topicBar.hidden = false;
+    topicBar.className = 'topic-bar';
+    topicBar.innerHTML = '';
+    const mk = (label, val) => {
+      const b = el('button', 'topic-chip' + (home.topic === val ? ' active' : ''), esc(label));
+      b.addEventListener('click', () => { home.topic = val; applyTopicFilter(); renderTopicBar(); });
+      return b;
+    };
+    topicBar.appendChild(mk('全部', ''));
+    top.forEach((t) => topicBar.appendChild(mk(t, t)));
+  }
+
+  function applyTopicFilter() {
+    let shown = 0;
+    [...grid.children].forEach((node) => {
+      const d = node._card;
+      const ok = !home.topic || (d && (Array.isArray(d.tags) ? d.tags : []).includes(home.topic));
+      node.style.display = ok ? '' : 'none';
+      if (ok) shown += 1;
+    });
+    status.textContent = home.topic
+      ? `—「${home.topic}」共 ${shown} 部 —`
+      : (home.done ? `— 共 ${home.items.length} 部，已经到底了 —` : '');
+  }
 
   function skeleton(n = 6) {
     grid.innerHTML = '';
@@ -155,10 +326,20 @@
     // 每次切视图都换一代，丢弃上一代还在飞行的请求结果，
     // 否则重复 reset 会让第二次请求又从 offset=0 开始，拿回重复数据后误判「到底了」
     homeGen += 1;
+    homeFeedGen += 1;
     home.started = true;
     home.view = view; home.page = 0; home.loading = false; home.done = false; home.items = [];
+    home.topic = '';
     grid.innerHTML = ''; status.textContent = '';
+    clearHomeExtras();
     if (view === 'mine') return renderMine();
+    if (view === 'index') {
+      // 首页：只展示 Banner + 三条分区轨道，不再堆下方榜单网格
+      home.done = true;
+      renderHomeFeed(homeFeedGen);
+      return;
+    }
+    // 热播榜与三个分类：加载网格列表
     skeleton();
     loadHome();
   }
@@ -183,7 +364,14 @@
       }
 
       if (gen !== homeGen) return;   // 期间切换了视图，这批数据作废
-      if (home.page === 0) grid.innerHTML = '';
+      if (home.page === 0) {
+        grid.innerHTML = '';
+        // 各分类页也继承首页的轮播背景：用本分类首批数据渲染 Banner（含文案/立即观看）
+        if (homeHero && homeSections) {
+          renderBanner(homeHero, toCards(items).slice(0, 6), true);  // 分类页只要背景图
+          homeSections.innerHTML = '';
+        }
+      }
       const seen = new Set(home.items.map((x) => x.id));
       let added = 0;
       items.forEach((it) => {
@@ -191,15 +379,19 @@
         if (d.id && seen.has(d.id)) return;   // 跨页去重
         if (d.id) seen.add(d.id);
         home.items.push(d);
-        grid.appendChild(card(it));
+        const node = card(it);
+        node._card = d;                        // 题材筛选时按 tags 过滤用
+        grid.appendChild(node);
         added += 1;
       });
 
       home.page += 1;
       if (added === 0 || !more || home.items.length >= 600) home.done = true;
-      status.textContent = home.items.length === 0
+      if (home.topic) applyTopicFilter();      // 已选题材时，新翻页数据沿用过滤
+      else status.textContent = home.items.length === 0
         ? '暂无内容'
         : (home.done ? `— 共 ${home.items.length} 部，已经到底了 —` : '');
+      if (home.page === 1) renderTopicBar();   // 首屏数据到位后聚合题材 chips
     } catch (e) {
       if (gen === homeGen) {
         status.textContent = e.message || '加载失败';
@@ -213,7 +405,7 @@
 
   /* 首屏没填满视口时继续拉，避免「一屏只有 30 个」的错觉 */
   function maybeFill() {
-    if (home.done || home.view === 'mine') return;
+    if (home.done || home.view === 'mine' || home.view === 'index') return;
     // 正在加载就等它结束再判断，否则这次机会被吞掉，页面会停在 24 条
     if (home.loading) { setTimeout(maybeFill, 300); return; }
     const rect = sentinel.getBoundingClientRect();
@@ -275,7 +467,9 @@
       <h2>继续观看</h2>
       <div class="mini-list" id="historyList">${rows.length ? '' : '<div class="empty">还没有观看记录</div>'}</div>
       <h2>我的收藏</h2>
-      <div class="mini-list" id="favList">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>`;
+      <div class="mini-list" id="favList">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>
+      <h2>弹幕设置</h2>
+      <div class="settings-card" id="danmakuSettings"></div>`;
     const reserveList = wrap.querySelector('#reserveList');
     const historyList = wrap.querySelector('#historyList');
     const favList = wrap.querySelector('#favList');
@@ -283,6 +477,7 @@
     rows.forEach((r) => historyList.appendChild(miniRow(r, true)));
     favs.forEach((r) => favList.appendChild(miniRow(r, false)));
     grid.appendChild(wrap);
+    renderDanmakuSettings();
     const cc = $('clearCacheBtn');
     if (cc) {
       cc.addEventListener('click', async () => {
@@ -486,6 +681,7 @@
   }
 
   function openSearch() {
+    document.body.classList.remove('hero-bg-view');
     searchPage.hidden = false;
     const hw = $('hotWords');
     if (!hw.dataset.init) {
@@ -531,6 +727,7 @@
 
   async function openDetail(seriesId, seed, keepHash) {
     if (!seriesId) return;
+    document.body.classList.remove('hero-bg-view');
     if (!keepHash) history.replaceState(null, '', '#/d/' + seriesId);
     detail = { seriesId, meta: null, episodes: [] };
     detailNext = null;              // 切剧先清掉上一部的下一季状态
@@ -1597,6 +1794,10 @@
       play.speed, (v) => setSpeed(v));
     group('弹幕字号', [{ value: 's', label: '小' }, { value: 'm', label: '中' }, { value: 'l', label: '大' }],
       dm.size, (v) => setDmSize(v));
+    group('弹幕行数', DM_ROWS_OPTIONS.map((n) => ({ value: n, label: n + ' 行' })),
+      dm.rows, (v) => setDmRows(v));
+    group('弹幕速度', [{ value: 'fast', label: '快' }, { value: 'medium', label: '中' }, { value: 'slow', label: '慢' }],
+      dm.speed, (v) => setDmSpeed(v));
     group('弹幕透明度', [
       { value: 1, label: '100%' }, { value: 0.8, label: '80%' },
       { value: 0.6, label: '60%' }, { value: 0.4, label: '40%' }
@@ -1776,12 +1977,24 @@
     }
     if (last < text.length) box.appendChild(document.createTextNode(text.slice(last)));
   }
+  // 弹幕滚动速度档位：全屏横穿秒数（越小越快），对齐参考项目 快/中/慢 三档
+  const DM_SPEED_MS = { fast: 6, medium: 8, slow: 12 };
+  const DM_ROWS_OPTIONS = [1, 3, 5];
   const dm = {
     on: store.get('mr.dm', true) !== false,
     size: store.get('mr.dmSize', 'm'),
     opacity: (() => {
       const v = Number(store.get('mr.dmOpacity', 0.9));
       return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.9;
+    })(),
+    // 同时显示行数与滚动速度（设置页可调，播放器实时生效）
+    rows: (() => {
+      const n = Number(store.get('mr.dmRows', 3));
+      return DM_ROWS_OPTIONS.includes(n) ? n : 3;
+    })(),
+    speed: (() => {
+      const s = store.get('mr.dmSpeed', 'medium');
+      return DM_SPEED_MS[s] ? s : 'medium';
     })(),
     items: [], idx: 0, last: 0, lanes: [], token: 0,
     raf: 0, notice: '',
@@ -1844,8 +2057,9 @@
 
     el2.className = 'dm-item';
     const h = dmFontPx() + 10;
-    // 只占上半屏，别挡住字幕和底部控件
-    const lanes = Math.max(3, Math.min(6, Math.floor((layer.clientHeight * 0.45) / h)));
+    // 用户设定行数优先；同时不超过上半屏可容纳的轨道数（别挡字幕和底部控件）
+    const cap = Math.max(1, Math.min(6, Math.floor((layer.clientHeight * 0.45) / h)));
+    const lanes = Math.min(dm.rows, cap);
     if (dm.lanes.length !== lanes) dm.lanes = new Array(lanes).fill(0);
 
     let lane = -1;
@@ -1857,7 +2071,8 @@
     el2.style.top = (DM_TOP + lane * h) + 'px';
     layer.appendChild(el2);
     const w = el2.offsetWidth || item.text.length * dmFontPx();
-    const speed = Math.max(80, layer.clientWidth / 8);   // px/s，约 8 秒横穿一屏
+    const crossSec = DM_SPEED_MS[dm.speed] || DM_SPEED_MS.medium;
+    const speed = Math.max(80, layer.clientWidth / crossSec);   // px/s，按设定档位横穿一屏
     const dur = (layer.clientWidth + w + 24) / speed;
     dm.lanes[lane] = now + ((w + 24) / speed) * 1000;
 
@@ -1987,7 +2202,75 @@
     dm.opacity = Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.9;
     store.set('mr.dmOpacity', dm.opacity);
     renderToolsMenu();
+    renderDanmakuSettings();
     toast('弹幕透明度：' + Math.round(dm.opacity * 100) + '%');
+  }
+
+  function setDmRows(value) {
+    const n = Number(value);
+    dm.rows = DM_ROWS_OPTIONS.includes(n) ? n : 3;
+    dm.lanes = [];                       // 行数变了，重建轨道避免旧状态串位
+    store.set('mr.dmRows', dm.rows);
+    renderToolsMenu();
+    renderDanmakuSettings();
+    toast('弹幕行数：' + dm.rows + ' 行');
+  }
+
+  function setDmSpeed(value) {
+    dm.speed = DM_SPEED_MS[value] ? value : 'medium';
+    store.set('mr.dmSpeed', dm.speed);
+    renderToolsMenu();
+    renderDanmakuSettings();
+    toast('弹幕速度：' + ({ fast: '快', medium: '中', slow: '慢' }[dm.speed]));
+  }
+
+  /* 「我的 > 弹幕设置」：与播放器工具菜单共用同一份 dm 状态，改一处全局生效。
+     设置页不在 DOM（未进「我的」页）时安全返回，setDm* 调用不会报错。 */
+  function renderDanmakuSettings() {
+    const host = $('danmakuSettings');
+    if (!host) return;
+    const row = (label, hint, control) => {
+      const r = el('div', 'setting-row');
+      const left = el('div', 'label');
+      left.innerHTML = esc(label) + (hint ? `<div class="hint">${esc(hint)}</div>` : '');
+      r.appendChild(left);
+      r.appendChild(control);
+      return r;
+    };
+    const seg = (options, current, onPick) => {
+      const box = el('div', 'setting-seg');
+      options.forEach(([v, label]) => {
+        const b = el('button', String(v) === String(current) ? 'on' : '', label);
+        b.addEventListener('click', () => onPick(v));
+        box.appendChild(b);
+      });
+      return box;
+    };
+    host.innerHTML = '';
+    // 显示弹幕开关
+    const sw = el('button', 'setting-switch' + (dm.on ? ' on' : ''));
+    sw.title = dm.on ? '已开启' : '已关闭';
+    sw.addEventListener('click', () => setDanmaku(!dm.on));
+    host.appendChild(row('显示弹幕', '播放器内叠加显示弹幕', sw));
+    // 字号
+    host.appendChild(row('弹幕字号', null,
+      seg([['s', '小'], ['m', '中'], ['l', '大']], dm.size, (v) => setDmSize(v))));
+    // 同时显示行数
+    host.appendChild(row('同时显示行数', '密集时最多占用的轨道数',
+      seg(DM_ROWS_OPTIONS.map((n) => [n, n + ' 行']), dm.rows, (v) => setDmRows(v))));
+    // 滚动速度
+    host.appendChild(row('滚动速度', null,
+      seg([['fast', '快'], ['medium', '中'], ['slow', '慢']], dm.speed, (v) => setDmSpeed(v))));
+    // 不透明度（滑块）
+    const rngWrap = el('div', 'setting-range');
+    const rng = el('input');
+    rng.type = 'range'; rng.min = '10'; rng.max = '100'; rng.step = '5';
+    rng.value = String(Math.round(dm.opacity * 100));
+    const val = el('span', 'val', Math.round(dm.opacity * 100) + '%');
+    rng.addEventListener('input', () => { val.textContent = rng.value + '%'; });
+    rng.addEventListener('change', () => setDmOpacity(Number(rng.value) / 100));
+    rngWrap.appendChild(rng); rngWrap.appendChild(val);
+    host.appendChild(row('不透明度', null, rngWrap));
   }
 
   requestAnimationFrame(dmTick);
@@ -2173,6 +2456,13 @@
   });
 
   /* ---------------- 事件绑定 ---------------- */
+  function switchTab(arg) {
+    const btn = [...$('tabs').children].find((b) => (b.dataset.arg || '') === arg
+      || (arg === 'mine' && b.dataset.view === 'mine'));
+    if (btn) [...$('tabs').children].forEach((b) => b.classList.toggle('active', b === btn));
+    if (arg === 'mine') { home.view = 'mine'; resetHome('mine'); return; }
+    resetHome(arg);
+  }
   $('tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('.tab');
     if (!btn) return;
@@ -2182,7 +2472,10 @@
   });
 
   $('searchBtn').addEventListener('click', openSearch);
-  $('searchBack').addEventListener('click', () => { searchPage.hidden = true; });
+  $('searchBack').addEventListener('click', () => {
+    searchPage.hidden = true;
+    if (home.view === 'index') document.body.classList.add('hero-bg-view');
+  });
   $('searchGo').addEventListener('click', doSearch);
   $('searchInput').addEventListener('input', onSearchInput);
   $('searchInput').addEventListener('keydown', (e) => {
@@ -2193,6 +2486,7 @@
   $('detailBack').addEventListener('click', () => {
     detailPage.hidden = true;
     document.body.style.overflow = '';   // 回到首页，恢复页面滚动
+    if (home.view === 'index') document.body.classList.add('hero-bg-view');
     history.replaceState(null, '', location.pathname + location.search);
   });
   $('playFirst').addEventListener('click', () => {
@@ -2371,7 +2665,7 @@
     video.addEventListener('volumechange', () => {
       if (!video.muted) store.set('mr.vol', video.volume);
     });
-    resetHome('hot');
+    resetHome('index');
     routeFromHash();
     maybeCheckReservations();   // 预约的剧若已上线下一季，顶部提醒
   }

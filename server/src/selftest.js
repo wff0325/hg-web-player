@@ -969,6 +969,12 @@ function appSource() {
     AppSource.VIDEO_TAB_API);
   check('GET 取址 UA 版本与设备注册一致（73932）',
     AppSource.VIDEO_TAB_UA.indexOf('/73932') > 0, AppSource.VIDEO_TAB_UA);
+  check('GET 取址使用 video_tab 专用 UA（25053RT47C）',
+    AppSource.VIDEO_TAB_UA.indexOf('25053RT47C') > 0, AppSource.VIDEO_TAB_UA);
+  check('备用取址域名为 b（0.16.13 兼容档重查）',
+    AppSource.VIDEO_API_HOST_ALT === 'api5-normal-sinfonlineb.fqnovel.com',
+    AppSource.VIDEO_API_HOST_ALT);
+  check('未启用官网低清兜底', AppSource.webPlayInfo === undefined, '已移除');
 
   // 选流：上游 quality_desc 与真实分辨率不一致时不能整集报错。
   // 实测有整部剧所有档短边最高 720，却把其中一档标成 1080p；
