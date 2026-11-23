@@ -37,16 +37,16 @@ async function search(keyword, maxPagesArg) {
   const kw = keyword === null || keyword === undefined ? '' : String(keyword).trim();
   if (kw === '') return out;
   const maxPages = Math.max(1, Math.min(maxPagesArg || 3, 5));
-  const seen = new Set();
-  for (let page = 1; page <= maxPages; page++) {
-    let list = [];
-    let hasMore = false;
+
+  // 并发翻页：官网接口免签、彼此独立，串行翻 5 页要 5×1~2s≈6~10s，
+  // 并发只需要最慢那一页的时间（约 1~2s）。这是搜索提速的关键。
+  const fetchPage = async (page) => {
+    // 官网搜索页的 XHR 接口：免签（a_bogus 可省）。
+    // 一页 10 条且会把同剧各季散落在不同页（第二季常常在第 2 页），
+    // 所以按 page 翻几页再合并，否则「持械入宋」只能搜到 9 季。
+    const url = SITE_ORIGIN + '/api/search/result?aid=8662&query='
+      + Http.urlencode(kw) + '&page=' + page;
     try {
-      // 官网搜索页的 XHR 接口：免签（a_bogus 可省）。
-      // 一页 10 条且会把同剧各季散落在不同页（第二季常常在第 2 页），
-      // 所以按 page 翻几页再合并，否则「持械入宋」只能搜到 9 季。
-      const url = SITE_ORIGIN + '/api/search/result?aid=8662&query='
-        + Http.urlencode(kw) + '&page=' + page;
       const res = await Http.send({
         url,
         method: 'GET',
@@ -57,15 +57,25 @@ async function search(keyword, maxPagesArg) {
           Referer: SITE_ORIGIN + '/search/' + Http.urlencode(kw),
         },
       });
-      if (res.status !== 200) break;
+      if (res.status !== 200) return { page, list: [], hasMore: false };
       const j = Json.optObj(JSON.parse(res.text()));
-      if (j === null) break;
-      list = Json.optArr(j.searchList);
-      hasMore = j.hasMore === true || j.has_more === true;
+      if (j === null) return { page, list: [], hasMore: false };
+      return {
+        page,
+        list: Json.optArr(j.searchList),
+        hasMore: j.hasMore === true || j.has_more === true,
+      };
     } catch (e) {
       Log.warn('官网搜索失败(' + kw + ' p' + page + '): ' + e.message);
-      break;
+      return { page, list: [], hasMore: false };
     }
+  };
+
+  const pages = await Promise.all(
+    Array.from({ length: maxPages }, (_, i) => fetchPage(i + 1)));
+  // 按页码顺序合并，保证结果顺序稳定；seen 去重（同剧各季是不同 id，不会被去掉）
+  const seen = new Set();
+  for (const { list } of pages) {
     for (const item of list) {
       const cell = Json.optObj(item);
       if (cell === null) continue;
@@ -91,7 +101,6 @@ async function search(keyword, maxPagesArg) {
       row.remark = Json.optStr(vd.episode_right_text, '');
       out.push(row);
     }
-    if (!hasMore || list.length === 0) break;
   }
   return out;
 }

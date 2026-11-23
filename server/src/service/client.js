@@ -744,19 +744,29 @@ async function appSearchPage(query, limit, skipN) {
  * 无后续页）。App 无结果或请求失败时回落官网；官网也无结果时，若 App
  * 是异常失败则把该异常抛给调用方，否则返回空页。
  */
+/**
+ * 搜索一页。
+ *
+ * 性能背景（2026-11 实测）：App 签名搜索每次请求都被全局节流卡 1.2 秒，
+ * 还要翻多页，累计 4~8 秒；官网 /api/search/result 免签、单页只要 0.1~0.2 秒，
+ * 而且会把同剧各季一并列出（比 App 更全）。短剧之家这类站点快，正是走轻量源。
+ *
+ * 策略：**官网优先，App 兜底**。
+ *  - 官网结果够一页（或翻满 5 页）就直接返回，完全不碰慢的 App 接口 → 秒回；
+ *  - 只有官网空、或结果明显不足时，才补 App 接口合并，避免漏剧。
+ *  - 缓存只存 10 分钟，避免剧集上线后长期看不到。
+ */
 async function searchPage(query, maxItemsArg, skip) {
   const limit = Math.max(1, Math.min(
     maxItemsArg > 0 ? maxItemsArg : Log.envInt('HG_SEARCH_MAX_ITEMS', 20), 40));
   const skipN = Math.max(0, skip);
 
-  // 官网搜索（精确，含同剧各季）与 App 搜索（模糊、量大）合并。
-  // 只走 App 搜索时，搜「持械入宋」只命中第一季，第二~第十季完全搜不到；
-  // 官网 /api/search/result 会把同剧各季一并列出，所以两边都取再合并去重。
   const ckWeb = Safeguards.cacheKey('websearch2', query);
   let webItems = Safeguards.cacheGet(ckWeb);
   if (!Array.isArray(webItems)) {
     try {
-      const web = await WebSource.search(query);
+      // 翻满 5 页（约 50 条）：既覆盖同剧各季，也尽量不劳烦 App 接口
+      const web = await WebSource.search(query, 5);
       webItems = web.length > 0 ? webSearchItems(web) : [];
     } catch (e) {
       webItems = [];
@@ -765,37 +775,37 @@ async function searchPage(query, maxItemsArg, skip) {
     Safeguards.cacheSet(ckWeb, webItems, 600);
   }
 
+  // 官网够用：直接切片返回，不调 App（这是快的路径）
+  if (webItems.length > 0) {
+    const need = skipN + limit;
+    if (webItems.length >= need) {
+      // 官网缓存最多 50 条（5 页×10）。翻满说明可能还有更多，给 true；
+      // 下次 skip 越过 50 时官网切片为空，会落到下面的 App 兜底续页。
+      return Page.slice(webItems, skipN, limit, webItems.length >= 50);
+    }
+    if (skipN === 0) {
+      // 首屏：官网有结果但不足一页，直接给（上游命中有限，不等慢的 App）
+      return new Page(webItems, false, webItems.length);
+    }
+    // 续页：官网这 50 条已被翻完，交给 App 分页继续（不是没有更多，是官网到头了）
+    if (webItems.length >= 50) {
+      try {
+        const appMore = await appSearchPage(query, limit, skipN);
+        if (appMore !== null) return appMore;
+      } catch (e) { /* App 也失败就当没有更多 */ }
+    }
+    return Page.slice(webItems, skipN, limit, false);
+  }
+
+  // 官网完全没结果：才退回 App 签名搜索（模糊匹配，有时能补到官网没有的）
   let appPage = null;
   let appError = null;
   try {
     appPage = await appSearchPage(query, limit, skipN);
   } catch (e) {
     appError = e;
-    Log.warn('App 搜索失败，仅用官网结果 (' + query + ')：' + e.message);
+    Log.warn('App 搜索失败，官网也无结果 (' + query + ')：' + e.message);
   }
-
-  if (webItems.length > 0) {
-    if (skipN === 0) {
-      const seen = new Set();
-      const merged = [];
-      const push = (it) => {
-        const id = Json.optStr(it.series_id, '');
-        if (id !== '') {
-          if (seen.has(id)) return;
-          seen.add(id);
-        }
-        merged.push(it);
-      };
-      webItems.forEach(push);
-      if (appPage !== null) appPage.items.forEach(push);
-      const capped = merged.slice(0, 60);
-      return new Page(capped, appPage !== null && appPage.hasMore, capped.length);
-    }
-    // 官网结果只有一页，续页交给 App 分页
-    if (appPage !== null) return appPage;
-    return Page.slice([], skipN, limit, false);
-  }
-
   if (appPage !== null) return appPage;
   if (appError !== null) throw appError;
   return Page.slice([], skipN, limit, false);
