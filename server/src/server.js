@@ -23,6 +23,7 @@ const Download = require('./service/download');
 const Res = require('./service/res');
 const Stream = require('./service/stream');
 const Danmaku = require('./service/danmaku');
+const SearchCache = require('./service/search-cache');
 const WebSync = require('./service/web-sync');
 const Http = require('./util/http');
 const Json = require('./util/json');
@@ -189,6 +190,84 @@ class Server {
     if (timer.unref) timer.unref();
   }
 
+  /**
+   * 定时预热搜索缓存。
+   *
+   * 搜索冷词要跨境 6~9 秒，命中缓存 0.002 秒。这里每小时从三个榜单取新剧名，
+   * 逐个强制搜索（透传 force=true 绕过所有内存缓存、拉上游最新），把结果写进
+   * 磁盘缓存。这样：① 常见词/新剧提前进缓存，用户搜的时候秒回；② 每小时刷新
+   * 保证下一季上线后能被搜到（不会一直吃旧缓存错过预约提醒）。
+   *
+   * 配置：runtime.search_cache.enabled / warmup_hours / warmup_per_board。
+   * 启动后延迟 3 分钟跑首轮，避免和启动期的其他请求抢上游。
+   */
+  /** 跑一轮搜索缓存预热（定时与手动接口共用；防重入）。返回统计对象。 */
+  async warmSearchCache() {
+    if (this._warming) return { ok: false, note: '上一轮预热仍在进行' };
+    this._warming = true;
+    const began = Date.now();
+    let warmed = 0;
+    let failed = 0;
+    let titles = [];
+    try {
+      const perBoard = Math.max(1, Math.min(
+        Math.round(Config.num('runtime.search_cache.warmup_per_board', 12)), 40));
+      const boards = ['new', 'recommend', 'hot'];
+      const seen = new Set();
+      for (const board of boards) {
+        let page;
+        try {
+          page = await Client.rankPage(board, perBoard, 0);
+        } catch (e) {
+          Log.warn('预热：榜单 ' + board + ' 拉取失败：' + e.message);
+          continue;
+        }
+        for (const it of (page && page.items) || []) {
+          const t = String(it.title || '').trim();
+          if (t !== '' && !seen.has(t)) { seen.add(t); titles.push(t); }
+        }
+      }
+      Log.info('搜索缓存预热：开始，' + titles.length + ' 个关键词');
+      // 逐个搜，间隔 throttle_ms 防风控（沿用全局节流配置）
+      const gap = Math.max(0, Math.round(Config.num('runtime.throttle_ms', 1200)));
+      for (const q of titles) {
+        try {
+          await Client.searchPage(q, 20, 0, true);
+          warmed++;
+        } catch (e) {
+          failed++;
+        }
+        if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+      }
+      SearchCache.flush(true);
+      const secs = Math.round((Date.now() - began) / 1000);
+      Log.info('搜索缓存预热：完成 ' + warmed + '/' + titles.length
+        + '（失败 ' + failed + '），耗时 ' + secs + 's');
+      this._warming = false;
+      return { ok: true, keywords: titles.length, warmed, failed, seconds: secs };
+    } catch (e) {
+      this._warming = false;
+      Log.warn('搜索缓存预热异常：' + (e && e.message ? e.message : e));
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
+
+  scheduleSearchWarmup() {
+    if (!Config.bool('runtime.search_cache.enabled', true)) return;
+    const hours = Config.num('runtime.search_cache.warmup_hours', 1);
+    if (hours <= 0) return;                       // <=0 关闭预热
+    const intervalMs = hours * 3600 * 1000;
+    // 首轮延迟 3 分钟；之后按周期。用 unref 不阻止进程退出。
+    const first = setTimeout(() => {
+      this.warmSearchCache();
+      const timer = setInterval(() => { this.warmSearchCache(); }, intervalMs);
+      if (timer.unref) timer.unref();
+      this._warmupTimer = timer;
+    }, 3 * 60 * 1000);
+    if (first.unref) first.unref();
+    this._warmupFirst = first;
+  }
+
   start(host, port) {
     this.httpServer = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => {
@@ -199,6 +278,8 @@ class Server {
     return new Promise((resolve, reject) => {
       this.httpServer.once('error', reject);
       this.scheduleKeyRotation();
+      SearchCache.init();                 // 加载磁盘搜索缓存（重启不丢）
+      this.scheduleSearchWarmup();        // 每小时预热新剧
       this.httpServer.listen(port, host, () => {
         Log.info('红果短剧 Web API  http://' + host + ':' + port);
         Log.info('前端页面        http://' + host + ':' + port + '/ui');
@@ -809,6 +890,41 @@ class Server {
       m.min_free_mb = Config.num('runtime.min_free_mb', 300);
       m.max_files = Config.num('runtime.cache.max_files', 30);
       Res.json(req, res, 200, m);
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/search-cache') {
+      // 搜索缓存状态：条目数、TTL、是否落盘。诊断用，普通 api_key 可查。
+      const st = SearchCache.stats();
+      Res.json(req, res, 200, Object.assign({ ok: true }, st));
+      return;
+    }
+    if (method === 'POST' && pathname === '/search-cache') {
+      // 管理操作：action=warm 立即预热 / flush 立即落盘 / clear 清空。
+      if (!this.checkAdmin(req, q)) {
+        Res.fail(req, res, 401, '需要 admin_token');
+        return;
+      }
+      const action = String(q.action || '');
+      if (action === 'warm') {
+        // 后台跑，立即返回（预热要几十秒）。完成结果写日志与 /search-cache 统计。
+        const started = !this._warming;
+        this.warmSearchCache().catch(() => {});
+        Res.json(req, res, 200, { ok: true, started, note: started ? '预热已启动' : '上一轮预热仍在进行' });
+        return;
+      }
+      if (action === 'flush') {
+        const wrote = SearchCache.flush(true);
+        Res.json(req, res, 200, { ok: true, wrote, stats: SearchCache.stats() });
+        return;
+      }
+      if (action === 'clear') {
+        SearchCache.clear();
+        SearchCache.flush(true);
+        Res.json(req, res, 200, { ok: true, cleared: true });
+        return;
+      }
+      Res.fail(req, res, 400, 'action 需为 warm/flush/clear');
       return;
     }
 
