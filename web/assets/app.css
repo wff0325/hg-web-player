@@ -298,38 +298,51 @@ main { padding: 0 12px; }
   background: linear-gradient(180deg, rgba(0,0,0,.72), rgba(0,0,0,0));
   transition: opacity .25s;
 }
-/* 播放器永远是黑底，标题必须固定白字 + 描边阴影：
-   它继承的是主题变量 --text，浅色主题下会变成近黑色，压在视频上几乎看不见。 */
+/* 播放器永远是黑底，标题固定白字。
+   做成一枚玻璃质感胶囊：左侧渐变播放图标 + 剧名（超长省略）+ 集数标签。 */
 .player-title {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  font-size: 14px; font-weight: 600;
-  color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.75);
+  flex: 1; min-width: 0;
+  display: inline-flex; align-items: center; gap: 9px;
+  max-width: max-content;
+  padding: 5px 11px 5px 6px;
+  border-radius: 999px;
+  background: rgba(20,20,24,.42);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: 0 2px 10px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.08);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  color: #fff;
 }
-/* 剧名跑马灯：外层裁剪，内层超长时才滚动（由 JS 判定溢出加 .marquee）。
-   两侧渐隐遮罩让首尾更柔和，不显得突兀。 */
-.pt-marquee {
-  position: relative; flex: 1 1 auto; min-width: 0;
-  white-space: nowrap; overflow: hidden;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
-  mask-image: linear-gradient(90deg, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
+/* 左侧渐变播放图标 */
+.pt-badge {
+  flex: 0 0 auto; width: 24px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #ff7a59, #ff4d6d);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(255,77,109,.36);
 }
-.pt-name { display: inline-block; padding-left: 2px; will-change: transform; }
-.player-title.marquee .pt-name {
-  animation: title-marquee var(--marquee-dur, 14s) ease-in-out infinite alternate;
+/* 文字区：剧名 + 集数横排，整体超长时压缩剧名 */
+.pt-text {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
 }
-@keyframes title-marquee {
-  0%, 8% { transform: translateX(0); }
-  92%, 100% { transform: translateX(var(--marquee-dist, -120px)); }
+.pt-name {
+  min-width: 0; max-width: 46vw;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px; font-weight: 600; letter-spacing: .2px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.55);
 }
-/* 集数做成固定徽章，不参与滚动——无论剧名多长都能一眼看到是第几集 */
+/* 集数做成精致小标签 */
 .pt-ep {
-  flex: 0 0 auto; font-size: 12px; font-weight: 700;
-  padding: 3px 8px; border-radius: 999px;
-  background: rgba(255,255,255,.16); color: #fff;
-  text-shadow: none; letter-spacing: .2px;
+  flex: 0 0 auto; font-size: 11.5px; font-weight: 700;
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.10);
+  color: #fff; text-shadow: none; letter-spacing: .3px;
+  white-space: nowrap;
 }
-@media (prefers-reduced-motion: reduce) {
-  .player-title.marquee .pt-name { animation: none; }
+@media (max-width: 480px) {
+  .pt-name { max-width: 38vw; font-size: 13px; }
 }
 #qualityBtn { font-size: 12.5px; font-weight: 700; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.14); color: #fff; width: auto; }
 .player-hint {

@@ -108,8 +108,13 @@
       <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
     <div class="player-title" id="playerTitle">
-      <span class="pt-marquee" id="ptMarquee"><span class="pt-name" id="ptName"></span></span>
-      <span class="pt-ep" id="ptEp"></span>
+      <span class="pt-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="13" height="13"><path d="M9 6.5v11l9-5.5z" fill="currentColor"/></svg>
+      </span>
+      <span class="pt-text">
+        <span class="pt-name" id="ptName"></span>
+        <span class="pt-ep" id="ptEp"></span>
+      </span>
     </div>
     <span class="sleep-badge" id="sleepBadge" hidden>定时</span>
     <button class="icon-btn light" id="qualityBtn">1080P</button>

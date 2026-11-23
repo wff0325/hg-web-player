@@ -39,10 +39,19 @@ const DENY = new Set([
   '.sync-manifest.json',
 ]);
 
+/** 是否命中保护名单：整路径匹配，或 basename 匹配（兼容 web/config.js 这种带前缀路径）。 */
+function isDenied(rel) {
+  const s = String(rel).replace(/\\/g, '/');
+  if (DENY.has(s)) return true;
+  if (DENY.has(s.split('/').pop())) return true;
+  if (s.startsWith('server/config/')) return true;   // 密钥/设备身份/运行配置整个目录保护
+  return false;
+}
+
 /** 判断文件是否可同步（路径安全 + 不在 DENY）。 */
 function safeRel(rel) {
   const s = String(rel).replace(/\\/g, '/').replace(/^\/+/, '');
-  if (s === '' || s.includes('..') || s.startsWith('.git/') || DENY.has(s)) return null;
+  if (s === '' || s.includes('..') || s.startsWith('.git/') || isDenied(s)) return null;
   if (!/^[A-Za-z0-9._\-/]+$/.test(s)) return null;   // 不允许空格/中文/特殊字符
   return s;
 }
@@ -166,7 +175,7 @@ async function sync(webDir) {
   const now = new Set(rels);
   const deleted = [];
   for (const rel of prev) {
-    if (now.has(rel) || safeRel(rel) === null || DENY.has(rel)) continue;
+    if (now.has(rel) || safeRel(rel) === null || isDenied(rel)) continue;
     // 旧清单是相对 web 的路径（assets/app.js），新版是 web/assets/app.js。
     // 兼容：旧格式的裸路径映射到 web 目录，避免删错位置。
     const mapped = (!rel.startsWith('web/') && !rel.startsWith('server/')) ? 'web/' + rel : rel;

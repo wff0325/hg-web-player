@@ -660,23 +660,9 @@
       if (box) box.textContent = `${title || ''} · 第 ${index} 集`;
       return;
     }
-    nameEl.textContent = String(title || '');       // 滚动部分：剧名
-    epEl.textContent = `第 ${index} 集`;              // 固定徽章：集数
-    box.classList.remove('marquee');
-    box.style.removeProperty('--marquee-dist');
-    box.style.removeProperty('--marquee-dur');
-    // 等一帧让布局完成再量宽度
-    requestAnimationFrame(() => {
-      const wrap = $('ptMarquee');
-      if (!wrap) return;
-      const over = nameEl.scrollWidth - wrap.clientWidth;
-      if (over > 6) {
-        box.style.setProperty('--marquee-dist', '-' + (over + 12) + 'px');
-        // 距离越长滚得越慢，保证可读性（每秒约 26px）
-        box.style.setProperty('--marquee-dur', Math.max(8, Math.round(over / 26)) + 's');
-        box.classList.add('marquee');
-      }
-    });
+    nameEl.textContent = String(title || '');       // 剧名（超长由 CSS 省略号截断）
+    epEl.textContent = `第 ${index} 集`;              // 集数标签
+    nameEl.title = String(title || '');             // 悬停可看完整剧名
   }
 
   async function playEpisode(index) {
