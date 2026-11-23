@@ -918,6 +918,49 @@ function isTransient(e) {
   return /未返回 data|HTTP \d+|暂未提供本集播放信息|接口未返回所选分集|timeout|timed out|ECONN|ETIMEDOUT|socket hang up|fetch failed|network/i.test(m);
 }
 
+/**
+ * 官网完整播放信息兜底。
+ *
+ * 2026-11-23 上游 App 取址接口对几乎所有请求返回 HTTP 200 空体（连官方参考实现
+ * 和上游作者本人都无法修复，见 hongguoTV issue #96/#102）。官网网页播放器仍能播，
+ * 它走的是 POST /api/video/protected/fallback-play-info（body: {item_id: vid}），
+ * 返回完整视频的 CDN 直链（字节 qznovelvod，H.264、无加密、支持 Range）。
+ *
+ * 注意：官网另有 /video/public/{vid}/360p.mp4，但**只有 10 秒试看**，不能用。
+ * 这个接口给的是完整集（实测 170 秒整），取址接口全挂时用它兜底。
+ */
+const WEB_PLAY_INFO_API = 'https://hongguoduanju.com/api/video/protected/fallback-play-info?aid=8662';
+const WEB_PROBE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+
+async function webPlayInfo(vid) {
+  const v = String(vid || '');
+  if (!/^\d{1,30}$/.test(v)) return null;
+  try {
+    const res = await Http.send({
+      url: WEB_PLAY_INFO_API, method: 'POST', timeoutMs: 12000,
+      headers: {
+        'User-Agent': WEB_PROBE_UA,
+        'Content-Type': 'application/json',
+        Referer: 'https://hongguoduanju.com/',
+      },
+      body: Buffer.from(JSON.stringify({ item_id: v })),
+    });
+    if (res.status !== 200) return null;
+    const j = Json.parseObject(res.text());
+    if (j === null) return null;
+    const status = j.base_resp ? Json.optInt(j.base_resp.StatusCode, 0) : 0;
+    if (status !== 0) return null;
+    const url = Json.optStr(j.main_url, '');
+    if (url === '') return null;
+    return {
+      url, spadeA: '', encrypt: false, definition: '官网', size: 0, web: true,
+      expireAt: Json.optLong(j.url_expire, 0),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 /** 单次取址 + 瞬时故障快速重试。 */
 async function fetchWithRetry(vid, quality, priority) {
   let last = null;
@@ -977,7 +1020,21 @@ async function drain() {
 function fetch(vid, quality, priority) {
   return new Promise((resolve, reject) => {
     queue.push({
-      fn: () => fetchWithRetry(vid, quality, priority),
+      fn: async () => {
+        try {
+          return await fetchWithRetry(vid, quality, priority);
+        } catch (e) {
+          // App 取址彻底失败 → 官网公开直链兜底（H.264、无加密、可直出）
+          const web = await webPlayInfo(vid);
+          if (web !== null) {
+            if (priority !== 'low') {
+              Log.info('取址接口不可用，已回退官网播放信息 ' + vid);
+            }
+            return web;
+          }
+          throw e;
+        }
+      },
       priority: priority === 'low' ? 0 : 1,
       seq: ++seq,
       resolve,
@@ -1019,6 +1076,7 @@ async function diagnose(vid, quality) {
 module.exports = {
   fetch,
   fetchRaw,
+  webPlayInfo,
   loadModel,
   listCandidates,
   diagnose,

@@ -211,6 +211,13 @@ main { padding: 0 12px; }
 .section-head h2 { margin: 0; font-size: 15px; }
 .muted { color: var(--muted); font-size: 12.5px; }
 /* 全季：横向滚动的季卡片，点击切到该季。多个同季版本都列出来，让用户自己选。 */
+/* hidden 会被下面的 display:flex 覆盖，必须显式处理，否则折叠/隐藏失效 */
+#seasonsHead[hidden], #seasonList[hidden] { display: none !important; }
+/* 折叠头：点标题展开/收起 */
+.seasons-head { cursor: pointer; user-select: none; }
+.seasons-head h2 { display: flex; align-items: baseline; gap: 6px; }
+.seasons-head .sh-arrow { color: var(--muted); align-self: center; transition: transform .2s; }
+.seasons-head.collapsed .sh-arrow { transform: rotate(-90deg); }
 .season-list {
   display: flex; gap: 10px; padding: 0 16px 6px;
   overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
@@ -531,7 +538,7 @@ main { max-width: 1440px; margin: 0 auto; }
 @media (min-width: 520px) and (max-width: 1023px) {
   main { padding: 0 20px; }
   .detail-hero { padding-left: 28px; padding-right: 28px; }
-  .intro, .section-head, .ep-grid { padding-left: 28px; padding-right: 28px; }
+  .intro, .section-head, .ep-grid, .season-list { padding-left: 28px; padding-right: 28px; }
   .ep-grid { grid-template-columns: repeat(8, 1fr); }
   .detail-hero .hero-inner img { width: 132px; }
   .hero-meta h1 { font-size: 22px; }
@@ -548,7 +555,7 @@ main { max-width: 1440px; margin: 0 auto; }
   .detail-hero .hero-inner { gap: 22px; }
   .detail-hero .hero-inner img { width: 168px; border-radius: 16px; }
   .hero-meta h1 { font-size: 26px; }
-  .intro, .section-head, .ep-grid { max-width: 1080px; margin-left: auto; margin-right: auto; }
+  .intro, .section-head, .ep-grid, .season-list { max-width: 1080px; margin-left: auto; margin-right: auto; }
   .ep-grid { grid-template-columns: repeat(12, 1fr); }
   .mine { margin: 0 auto; }
   .back-fab { left: calc(50% - 560px); }
@@ -560,7 +567,7 @@ main { max-width: 1440px; margin: 0 auto; }
   .brand-mark { width: 22px; height: 22px; }
   .detail-hero { padding-left: 14px; padding-right: 14px; }
   .intro { margin-left: 14px; margin-right: 14px; }
-  .section-head, .ep-grid { padding-left: 14px; padding-right: 14px; }
+  .section-head, .ep-grid, .season-list { padding-left: 14px; padding-right: 14px; }
 }
 
 /* ==================== 搜索联想 / 搜索历史 ==================== */

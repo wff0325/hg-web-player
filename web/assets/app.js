@@ -616,10 +616,11 @@
   function syncReserveBtn() {
     const btn = $('reserveBtn');
     if (!btn) return;
-    // 已经找到下一季：按钮变成「看第X季 →」，不再误导用户去预约一个已存在的季
+    // 已经找到下一季：按钮变成「看X季 →」，不再误导用户去预约一个已存在的季。
+    // 文案直接沿用该季标题里的写法（二季 / 第二季 / 第2季），和命名风格一致。
     if (detailNext) {
-      const s = parseSeason(String((detailNext.title || '')));
-      const label = s ? ('看第' + s.num + (s.kind === '部' ? '部' : '季')) : '看下一季';
+      const m = String(detailNext.title || '').match(/(第?\s*[0-9零〇一二两三四五六七八九十百]+\s*[季部])\s*$/);
+      const label = m ? ('看' + m[1].replace(/\s/g, '')) : '看下一季';
       btn.textContent = label + ' →';
       btn.classList.remove('ghost', 'on');
       btn.classList.add('primary');
@@ -1120,9 +1121,20 @@
       return ai - bi;
     });
 
-    head.hidden = false; list.hidden = false;
+    head.hidden = false;
     const cnt = $('seasonCount');
     if (cnt) cnt.textContent = rows.length + ' 季';
+    // 折叠：记住上次状态（默认展开）。点标题行展开/收起。
+    let collapsed = false;
+    try { collapsed = store.get('mr.seasonsCollapsed', false) === true; } catch (e) { /* 忽略 */ }
+    list.hidden = collapsed;
+    head.classList.toggle('collapsed', collapsed);
+    head.onclick = () => {
+      const next = !list.hidden;
+      list.hidden = next;
+      head.classList.toggle('collapsed', next);
+      try { store.set('mr.seasonsCollapsed', next); } catch (e) { /* 忽略 */ }
+    };
     rows.forEach((r) => {
       const node = el('div', 'season-item' + (r.now ? ' now' : ''));
       const coverHtml = r.cover
