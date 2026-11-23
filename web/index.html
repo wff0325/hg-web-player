@@ -195,23 +195,36 @@ window.MR_DO_UPDATE = function (cb) {
   var cfg = window.MR_CONFIG || {};
   var API = (cfg.API_BASE || '').replace(/\/+$/, '');
   var KEY = cfg.API_KEY || '';
-  var url = API + '/sync-web';
-  var headers = { 'Content-Type': 'application/json', 'x-api-key': KEY };
-  fetch(url, { method: 'POST', headers: headers, body: '{}' })
-    .then(function (r) {
-      return r.text().then(function (t) {
-        var j = {};
-        try { j = JSON.parse(t); } catch (e) {}
-        return { okHttp: r.ok, status: r.status, body: j };
+  function callSync(key) {
+    var url = API + '/sync-web';
+    var headers = { 'Content-Type': 'application/json', 'x-api-key': key || '' };
+    return fetch(url, { method: 'POST', headers: headers, body: '{}' })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var j = {};
+          try { j = JSON.parse(t); } catch (e) {}
+          return { okHttp: r.ok, status: r.status, body: j };
+        });
       });
-    })
-    .then(function (res) {
-      if (res.okHttp && res.body && res.body.ok) {
-        if (cb) cb(true, res.body);
-      } else {
-        if (cb) cb(false, (res.body && (res.body.detail || res.body.error)) || ('HTTP ' + res.status));
-      }
-    })
+  }
+  function done(res) {
+    if (res.okHttp && res.body && res.body.ok) {
+      if (cb) cb(true, res.body);
+    } else {
+      if (cb) cb(false, (res.body && (res.body.detail || res.body.error)) || ('HTTP ' + res.status));
+    }
+  }
+  // 公开站点 config.js 是空密钥模板，真实密钥由后端 /client-config 下发（会按小时轮换）。
+  // 先拿一次有效密钥再请求更新，避免拿空 key 撞 401 导致「点了没反应」。
+  var needKey = !KEY;
+  var keyReq = needKey
+    ? fetch(API + '/client-config', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { return (j && j.api_key) || KEY; })
+        .catch(function () { return KEY; })
+    : Promise.resolve(KEY);
+  keyReq.then(function (k) { return callSync(k); })
+    .then(done)
     .catch(function (e) { if (cb) cb(false, 'network'); });
 };
 </script>
