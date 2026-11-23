@@ -146,6 +146,22 @@ function md5(data) {
   return Crypto.md5(data);
 }
 
+/**
+ * body 的 MD5 摘要。
+ *
+ * 2026-11-23 上游协议更新：GET video_tab 签名改用「空字节摘要」md5(空)
+ * = d41d8cd98f00b204e9800998ecf8427e，而不是全零 16 字节。
+ * 权威参考 hongguo-drama 92df757 的 signPlaybackV5：
+ *   const bodyHash = hasBody ? md5(body) : md5(Buffer.alloc(0));
+ * 传全零摘要会被上游判空 data（HTTP 200 + 0 字节）。
+ *
+ * POST 链路都有 gzip body（length>0），此改动不影响它们。
+ */
+function bodyMd5Of(body) {
+  if (body === null || body === undefined || body.length === 0) return md5(Buffer.alloc(0));
+  return md5(body);
+}
+
 function sm3(data) {
   return crypto.createHash('sm3').update(data).digest();
 }
@@ -529,8 +545,8 @@ function rc4Gorgon(data, key) {
 
 function xGorgon(query, body, timestamp, random) {
   const q4 = sliceBytes(md5(Buffer.from(query, 'utf8')), 0, 4);
-  const b4 = body != null && body.length > 0
-    ? sliceBytes(md5(body), 0, 4) : Buffer.alloc(4);
+  const b4 = body === null || body === undefined
+    ? Buffer.alloc(4) : sliceBytes(bodyMd5Of(body), 0, 4);
   const sdk = le32(67503104);
   const input = concat(q4, b4, Buffer.alloc(4), sdk, be32(timestamp | 0));
   const key = [0x4a, 0x40, 0x16, (random >> 8) & 255, 0x47, 0x6c, 0x01, random & 255];
@@ -835,7 +851,7 @@ function deviceProto(deviceId, version) {
 
 /** 构造 x-medusa。 */
 function buildMedusa(url, body, khronos, deviceId, version) {
-  const bodyMd5 = body != null && body.length > 0 ? md5(body) : Buffer.alloc(16);
+  const bodyMd5 = bodyMd5Of(body);
   const query = queryOf(url);
   const querySm3 = sm3(Buffer.from(query, 'utf8'));
   const ts = le32(khronos | 0);
@@ -919,7 +935,7 @@ function buildMedusa(url, body, khronos, deviceId, version) {
 function buildMedusaV5(url, body, khronos, identity) {
   const who = identity || {};
   const query = sm3(Buffer.from(queryOf(url), 'utf8'));
-  const bodyMd5 = body != null && body.length > 0 ? md5(body) : Buffer.alloc(16);
+  const bodyMd5 = bodyMd5Of(body);
   const f13 = hashF13V5(query, bodyMd5, le32(khronos | 0), khronos);
   const flags = Buffer.alloc(8);
   const version = String(who.version_name || '');
@@ -1026,7 +1042,7 @@ function heliosWith(khronos, random, license) {
 
 /** 与 hashF13 相同的分支计算；branch==1 时服务端不认，调用方应抖动 _rticket 避开。 */
 function branchOf(url, body, khronos) {
-  const bodyMd5 = body != null && body.length > 0 ? md5(body) : Buffer.alloc(16);
+  const bodyMd5 = bodyMd5Of(body);
   const q = sm3(Buffer.from(queryOf(url), 'utf8'));
   const iv = getIv(getIv(getIv(0x20230928, q), bodyMd5), le32(khronos | 0));
   const low = iv & 15;
@@ -1092,7 +1108,7 @@ function encodeQuery(values) {
 
 /** v5 分支判定：只有 iv & 15 == 12 才被服务端接受（其余一律拒）。 */
 function branchV5(url, body, khronos) {
-  const bodyMd5 = body != null && body.length > 0 ? md5(body) : Buffer.alloc(16);
+  const bodyMd5 = bodyMd5Of(body);
   const q = sm3(Buffer.from(queryOf(url), 'utf8'));
   const iv = getIv(getIv(getIv(0x20230928, q), bodyMd5), le32(khronos | 0));
   return (iv & 15) === 12 ? 0 : 1;

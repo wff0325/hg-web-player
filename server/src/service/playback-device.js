@@ -12,12 +12,16 @@
  * 注册请求是「加密二进制」而非 JSON：gzip(JSON) -> sha512 摘要 + AES-128-CBC
  * 加密 -> 自定义帧头。响应里给 device_id / install_id（含 *_str 字符串形式）。
  *
- * 身份只存在进程内存，不落盘；重启后重新注册。失败缓存 10 秒，避免并发重试风暴。
+ * 身份落盘复用（server/config/playback-device.json），重启不再重新注册；
+ * 只有明确被上游拒（业务码）才换身份，且换身份有 30 秒冷却，避免每次取址都注册。
  */
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { gzipSync } = require('zlib');
 const Http = require('../util/http');
 const Log = require('../util/log');
+const Config = require('../util/config');
 
 const REGISTER_URL = 'https://log5-applog-lf.fqnovel.com/service/2/device_register/'
   + '?tt_data=a&cronet_version=8d40f833_2026-03-03&ttnet_version=4.2.243.31-douyin&use_store_region_cookie=1';
@@ -29,7 +33,45 @@ const KDF_SALT = Buffer.from(
 
 let cached = null;          // { device_id, iid, cdid }
 let inflight = null;        // Promise
-let retryAfter = 0;         // 失败冷却截止时间
+let retryAfter = 0;         // 注册失败冷却截止时间
+let rotateAfter = 0;        // 换身份冷却截止时间（默认 30 秒）
+const ROTATE_COOLDOWN_MS = 30 * 1000;
+
+/** 身份落盘路径：与设备身份池同目录（server/config），不随缓存目录迁移。 */
+function storePath() {
+  return path.resolve('server', 'config', 'playback-device.json');
+}
+
+/** 从磁盘加载已注册身份（重启复用，避免每次启动都注册新设备）。 */
+function loadCached() {
+  if (cached !== null) return cached;
+  try {
+    const p = storePath();
+    if (!fs.existsSync(p)) return null;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const device_id = responseId(j, 'device_id');
+    const iid = responseId(j, 'iid');
+    const cdid = typeof j.cdid === 'string' && j.cdid !== '' ? j.cdid : '';
+    if (!device_id || !iid || !cdid) return null;
+    cached = Object.freeze({ device_id, iid, cdid });
+    return cached;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** 把当前身份落盘（原子写）。 */
+function saveCached(id) {
+  try {
+    const p = storePath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    const tmp = p + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(id), 'utf8');
+    fs.renameSync(tmp, p);
+  } catch (e) {
+    Log.warn('播放设备身份落盘失败：' + e.message);
+  }
+}
 
 /** 从注册响应里取 device_id / install_id，优先 *_str，拒绝零值与非数字。 */
 function responseId(response, name) {
@@ -101,7 +143,9 @@ async function registerOnce() {
   const iid = responseId(j, 'install_id');
   if (!device_id || !iid) throw new Error('设备注册未返回有效身份');
   Log.info('匿名播放设备注册成功 device_id=' + device_id + ' install_id=' + iid);
-  return Object.freeze({ device_id, iid, cdid });
+  const id = Object.freeze({ device_id, iid, cdid });
+  saveCached(id);
+  return id;
 }
 
 /**
@@ -109,7 +153,18 @@ async function registerOnce() {
  * @param {boolean} [renew] 传 true 表示上一个身份被上游拒绝，强制换新。
  */
 async function getPlaybackDevice(renew) {
-  if (renew) { cached = null; inflight = null; }
+  if (cached === null) loadCached();          // 重启后先复用磁盘身份
+  // renew（换身份）：必须过冷却期，避免每次空响应都注册一台新设备。
+  // 冷却期内直接返回旧身份（上游空响应多半不是身份问题，换也没用）。
+  if (renew === true) {
+    if (Date.now() < rotateAfter) {
+      if (cached !== null) return cached;
+      throw new Error('换身份冷却中，请稍后重试');
+    }
+    rotateAfter = Date.now() + ROTATE_COOLDOWN_MS;
+    cached = null;
+    inflight = null;
+  }
   if (cached !== null) return cached;
   if (Date.now() < retryAfter) throw new Error('匿名设备注册冷却中，请稍后重试');
   if (inflight !== null) return inflight;

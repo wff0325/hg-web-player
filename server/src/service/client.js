@@ -178,7 +178,7 @@ const FILTER_STATUS = {};
 // ==================== 请求组装 ====================
 
 /** 组装完整 URL（含 base_query、设备身份、_rticket）。 */
-function buildUrl(pathname, extra, rticket) {
+function buildUrl(pathname, extra, rticket, host) {
   if (rticket === undefined || rticket === null) rticket = Date.now();
   const q = Object.assign({}, BASE_QUERY);
   const dev = currentDevice();
@@ -190,7 +190,7 @@ function buildUrl(pathname, extra, rticket) {
   for (const [k, v] of Object.entries(q)) {
     parts.push(k + '=' + Http.urlencode(String(v)));
   }
-  return 'https://' + HOST + pathname + '?' + parts.join('&');
+  return 'https://' + (host || HOST) + pathname + '?' + parts.join('&');
 }
 
 /** 构造基础请求头与请求体。 */
@@ -811,6 +811,121 @@ async function searchPage(query, maxItemsArg, skip) {
   return Page.slice([], skipN, limit, false);
 }
 
+/* ---------------- 官方「相关作品 / 同系列」接口（查全季） ---------------- */
+
+/**
+ * 端点 /reading/bookapi/plan/v:version/，v3 签名，参数 from=detail_page_more_related。
+ * 返回同一系列的其它季（含待上线 type=1007）。
+ *
+ * 为什么需要：搜索结果里「全球死考：…考试二季」和「…考试第三季」其实是**不同剧**
+ * （不同 series_id、不同集数），靠标题基名猜测会把它们当成同一系列，导致预约显示
+ * 错误的下一季。官方 related 数据才是权威分组。
+ *
+ * 移植自 N3urda/hongguoTV 的 ContentRepository.related + RelatedWorks.parse。
+ */
+const RELATED_HOSTS = [
+  'api5-normal-sinfonlinec.fqnovel.com',
+  'api5-normal-hl.fqnovel.com',
+  'api5-normal-lf.fqnovel.com',
+];
+const RELATED_PATH = '/reading/bookapi/plan/v:version/';
+
+/** 解析相关作品响应，只留短剧（1004 已上线 / 1007 待上线）。 */
+function parseRelated(raw, currentId) {
+  let root;
+  try { root = Json.parseObject(raw); } catch (e) { throw new Error('相关作品响应不是 JSON'); }
+  if (root === null) throw new Error('相关作品响应为空');
+  const code = Number(root.code === undefined ? root.Code : root.code);
+  if (code !== 0) throw new Error('相关作品接口返回 code=' + code);
+  const out = [];
+  const seen = new Set();
+  for (const c of Json.optArr(root.data)) {
+    const cell = Json.optObj(c);
+    if (cell === null) continue;
+    const showType = Json.optInt(cell.show_type, -1);
+    const cellName = Json.optStr(cell.cell_name, '');
+    if (showType !== 547 && cellName !== '相关作品') continue;
+    for (const v of Json.optArr(cell.video_data)) {
+      const row = Json.optObj(v);
+      if (row === null) continue;
+      const id = Json.optStr(row.series_id, '');
+      const title = Json.optStr(row.title, '');
+      const type = Json.optInt(row.content_type, 0);
+      if (id === '' || id === currentId || !/^\d{1,30}$/.test(id)) continue;
+      if (title.trim() === '' || (type !== 1004 && type !== 1007)) continue;
+      const upcoming = type === 1007;
+      const episodeCnt = Json.optInt(row.episode_cnt, 0);
+      if (!upcoming && (Json.optBool(row.disable_play, false) || episodeCnt <= 0)) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const seasonIndex = Math.max(0, Json.optInt(row.season_index, 0));
+      let seasonLabel = Json.optStr((Json.optObj(row.tag_info) || {}).text, '');
+      if (seasonLabel === '' && seasonIndex > 0) seasonLabel = '第' + seasonIndex + '季';
+      const r = Json.obj();
+      r.series_id = id;
+      r.title = title;
+      r.cover = Json.optStr(row.cover, '');
+      r.episode_cnt = episodeCnt;
+      r.content_type = type;
+      r.upcoming = upcoming;
+      r.season_index = seasonIndex;
+      r.season = seasonLabel;
+      out.push(r);
+    }
+  }
+  out.sort((a, b) => {
+    const ai = a.season_index > 0 ? a.season_index : Infinity;
+    const bi = b.season_index > 0 ? b.season_index : Infinity;
+    return ai - bi;
+  });
+  return out;
+}
+
+/** 拉某部剧的同系列其它季（缓存 30 分钟）。失败依次换 c/hl/lf 三个域名重试。 */
+async function relatedWorks(seriesId, force) {
+  const sid = String(seriesId);
+  const ck = Safeguards.cacheKey('related', sid);
+  if (!force) {
+    const cached = Safeguards.cacheGet(ck);
+    if (Array.isArray(cached)) return cached;
+  }
+  const extra = {
+    scene: '10', from: 'detail_page_more_related', book_id: sid,
+    new_search_middle_page: 'false', bookstore_tab_type: '0',
+    query_history_removed: 'false', user_is_login: '0', bookstore_tab: '0',
+    search_middle_page_version: '0', pad_column_detail: '0',
+    hot_word_exchange: 'false', device_level: '3', limit: '0', offset: '0',
+    is_horizontal_screen: 'false', reader_single_col_from_ip_strategy: 'false',
+  };
+  let lastErr = null;
+  for (const host of RELATED_HOSTS) {
+    try {
+      const khronos = Math.floor(Date.now() / 1000);
+      let rticket = Date.now();
+      let url = buildUrl(RELATED_PATH, extra, rticket, host);
+      let guard = 0;
+      while (PureSign.branchOf(url, null, khronos) === 1 && guard++ < 32) {
+        rticket += 1;
+        url = buildUrl(RELATED_PATH, extra, rticket, host);
+      }
+      const headers = buildHeaders(null).headers;
+      delete headers['accept-encoding'];
+      Object.assign(headers, PureSign.sign(url, null, khronos));
+      await Safeguards.throttle().wait();
+      const res = await Http.send({ url, method: 'GET', headers, timeoutMs: 20000 });
+      if (res.status !== 200) throw new Error('HTTP ' + res.status);
+      const txt = res.text();
+      if (txt.trim() === '') throw new Error('空响应');
+      const rows = parseRelated(txt, sid);
+      Safeguards.cacheSet(ck, rows, 1800);
+      return rows;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error('相关作品接口不可用' + (lastErr ? '：' + lastErr.message : ''));
+}
+
 /** 取单剧元信息 + 剧集列表（缓存 6 小时）。App 详情失败时回落官网分集页。 */
 async function getEpisodes(seriesId) {
   const sid = String(seriesId);
@@ -1379,6 +1494,8 @@ module.exports = {
   parseEpisodeDetail,
   search,
   searchPage,
+  relatedWorks,
+  parseRelated,
   getEpisodes,
   getEpisodesBatch,
   rank,

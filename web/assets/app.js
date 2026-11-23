@@ -535,6 +535,9 @@
     detail = { seriesId, meta: null, episodes: [] };
     detailNext = null;              // 切剧先清掉上一部的下一季状态
     detailNextToken += 1;           // 让上一部未完成的探测结果作废
+    const sh = $('seasonsHead'); const sl = $('seasonList');
+    if (sh) sh.hidden = true;
+    if (sl) { sl.hidden = true; sl.innerHTML = ''; }   // 先清空全季，避免闪上一部
     detailPage.hidden = false;
     // 详情页自己是 fixed 全屏滚动容器，必须锁住 body，
     // 否则首页那条滚动条会留在最右边，出现两条滑轨（外侧那条还拖不动）
@@ -576,6 +579,7 @@
       syncFavBtn();
       syncReserveBtn();
       probeDetailNext(seriesId);    // 有下一季就把按钮升级成「看第X季 →」
+      renderSeasons();              // 列出官方同系列全部季（多个同季版本都列，用户自选）
       // 打开详情页就把「大概率要点的那一集」丢给后端预取（有观看记录则续播那集，
       // 否则第 1 集）：等用户真去点播放时缓存多半已经就绪，首播不用再等解密。
       // 后端有并发去重与缓存，重复进详情页不会重复下载。
@@ -1003,6 +1007,142 @@
    * @param {boolean} [force] 忽略缓存
    * @returns {Promise<{next: object|null, current: object|null}>}
    */
+  /** 去掉季号 + 标点空白后的「标题主干」，用于判定是否同一系列。 */
+  function seasonStem(title) {
+    return String(title || '').trim()
+      .replace(/第?\s*[0-9零〇一二两三四五六七八九十百]+\s*季\s*$/, '')
+      .replace(/[\p{P}\p{Z}\s]/gu, '');
+  }
+
+  /**
+   * 季号写法分类。官方同一系列的命名风格统一，不同写法是不同的剧：
+   *   'plain'      二季      （省略「第」+ 中文数字）
+   *   'plain-ar'   2季       （省略「第」+ 阿拉伯数字）
+   *   'di'         第二季    （带「第」+ 中文数字）
+   *   'di-ar'      第2季     （带「第」+ 阿拉伯数字）
+   * 「…考试二季」的续集只能是「…考试三季」；「…考试第二季」的续集才是「…考试第三季」。
+   * 返回 null 表示标题里没有季号（不做风格限制）。
+   */
+  function seasonStyle(title) {
+    const m = String(title || '').match(/(第)?\s*([0-9零〇一二两三四五六七八九十百]+)\s*季\s*$/);
+    if (!m) return null;
+    const hasDi = !!m[1];
+    const arabic = /^[0-9]+$/.test(m[2]);
+    if (!hasDi) return arabic ? 'plain-ar' : 'plain';
+    return arabic ? 'di-ar' : 'di';
+  }
+
+  /**
+   * 从官方「相关作品」里挑下一季。
+   * 严格判定（移植自 hongguoTV RelatedWorks.nextSeason）：
+   *  - 季号 = 当前季号 + 1（season_index 优先，其次标题里的季号）
+   *  - 标题主干完全相同
+   *  - 已上线（非待上线）
+   *  - 唯一候选才认（多个同 stem 候选说明数据不可靠，宁可不给也不给错）
+   */
+  function pickNextFromOfficial(items, cur, sid, curTitle) {
+    const curStem = seasonStem(cur.base || '');
+    if (curStem === '') return null;
+    const want = cur.num + 1;
+    // 当前剧季号写法（第X季 / X季）。标题里没有季号时为 null，不做限制。
+    const curStyle = seasonStyle(curTitle || '');
+    const cands = [];
+    for (const it of items || []) {
+      if (!it || it.upcoming) continue;
+      if (String(it.series_id) === String(sid)) continue;
+      const idx = Number(it.season_index) > 0 ? Number(it.season_index) : 0;
+      const fromTitle = parseSeason(it.title);
+      const index = idx > 0 ? idx : (fromTitle ? fromTitle.num : 0);
+      if (index !== want) continue;
+      if (seasonStem(it.title) !== curStem) continue;
+      // 写法必须一致：「…考试二季」的续集应是「…考试三季」，不是「…考试第三季」
+      if (curStyle !== null && seasonStyle(it.title) !== curStyle) continue;
+      cands.push({
+        id: String(it.series_id), title: it.title,
+        cover: it.cover || '', episodes: it.episode_cnt || 0,
+      });
+    }
+    return cands.length === 1 ? cands[0] : null;
+  }
+
+  /**
+   * 详情页「全季」区块：用官方 related 数据列出同一系列的所有季，点击切换。
+   * 上游数据里同一季号可能有多个不同剧（如「…考试第三季」和「…考试三季」），
+   * 所以不自动挑，全部列出来让用户自己选，避免预约/连播给错剧。
+   */
+  async function renderSeasons() {
+    const head = $('seasonsHead');
+    const list = $('seasonList');
+    if (!head || !list) return;
+    head.hidden = true; list.hidden = true; list.innerHTML = '';
+    const sid = detail.seriesId;
+    if (!sid) return;
+    const meta = detail.meta || {};
+    const cur = currentSeason(meta);
+    if (cur === null) return;
+    const curStem = seasonStem(cur.base || '');
+    if (curStem === '') return;
+
+    let items = [];
+    try {
+      const r = await api('/series-seasons', { series_id: sid });
+      if (r && r.ok === true && Array.isArray(r.items)) items = r.items;
+    } catch (e) { return; }
+    if (detail.seriesId !== sid) return;   // 已经切到别的剧
+
+    const rows = [];
+    const seenIds = new Set();
+    const curStyle = seasonStyle(meta.title || '');
+    rows.push({
+      id: String(sid), title: meta.title || '', cover: meta.cover || '',
+      season_index: cur.num, upcoming: false, now: true,
+      episodes: (detail.episodes || []).length,
+    });
+    seenIds.add(String(sid));
+    for (const it of items) {
+      if (!it || seenIds.has(String(it.series_id))) continue;
+      if (seasonStem(it.title) !== curStem) continue;   // 只要真正的同系列
+      // 命名风格不同的是别的剧（二季 / 第二季 / 第2季 各自独立），不混进本列表
+      if (curStyle !== null && seasonStyle(it.title) !== curStyle) continue;
+      seenIds.add(String(it.series_id));
+      const ps = parseSeason(it.title);
+      const idx = Number(it.season_index) > 0 ? Number(it.season_index) : (ps ? ps.num : 0);
+      rows.push({
+        id: String(it.series_id), title: it.title, cover: it.cover || '',
+        season_index: idx, upcoming: !!it.upcoming, now: false,
+        episodes: it.episode_cnt || 0,
+      });
+    }
+    if (rows.length < 2) return;   // 只有一季就不用显示
+    rows.sort((a, b) => {
+      const ai = a.season_index > 0 ? a.season_index : Infinity;
+      const bi = b.season_index > 0 ? b.season_index : Infinity;
+      return ai - bi;
+    });
+
+    head.hidden = false; list.hidden = false;
+    const cnt = $('seasonCount');
+    if (cnt) cnt.textContent = rows.length + ' 季';
+    rows.forEach((r) => {
+      const node = el('div', 'season-item' + (r.now ? ' now' : ''));
+      const coverHtml = r.cover
+        ? `<img class="si-cover" loading="lazy" src="${esc(r.cover)}" alt="">`
+        : '<div class="si-cover-ph">📺</div>';
+      const label = r.season_index > 0 ? `第${r.season_index}季` : '季';
+      const sub = r.now ? '正在看'
+        : (r.upcoming ? '待上线' : label + (r.episodes ? ' · ' + r.episodes + '集' : ''));
+      node.innerHTML = `${coverHtml}<div class="si-t">${esc(r.title)}</div><div class="si-m">${sub}</div>`;
+      if (!r.now) {
+        node.addEventListener('click', () => {
+          hideNextSeason();
+          closePlayer();
+          openDetail(r.id, { id: r.id, title: r.title, cover: r.cover }).then(() => playEpisode(1));
+        });
+      }
+      list.appendChild(node);
+    });
+  }
+
   function lookupNextSeason(force) {
     const sid = detail.seriesId;
     const meta = detail.meta || {};
@@ -1019,29 +1159,43 @@
 
     const task = (async () => {
       let next = null;
+      let officialOk = false;
+
+      // 1) 官方「相关作品」优先：权威分组，能区分标题相似的不同的剧。
       try {
-        const r = await api('/search', { q: cur.base, limit: 30 });
-        let bestNum = Infinity;
-        for (const it of r.results || []) {
-          const d = normalize(it);
-          if (!d.id || d.id === sid) continue;
-          const s = parseSeason(d.title);
-          if (s === null || s.num <= cur.num || s.num >= bestNum) continue;
-          if (!sameBase(s.base, cur.base)) continue;
-          bestNum = s.num;
-          next = d;
+        const r = await api('/series-seasons', { series_id: sid, refresh: force ? '1' : '0' });
+        if (r && r.ok === true) {
+          officialOk = true;
+          next = pickNextFromOfficial(r.items, cur, sid, meta.title);
         }
-        if (next !== null) {
-          const info = await seasonDetail(next.id, meta.album_id);
-          if (!info.ok) {
-            next = null;
-          } else if (info.firstVid) {
-            // 顺手把下一季第 1 集预取到服务端，切过去就能秒开
-            prewarm(info.firstVid, play.quality);
+      } catch (e) { /* 接口不可用，走下面的搜索兜底 */ }
+
+      // 2) 只有官方接口「不可用」时才回退搜索。官方明确返回但没有下一季
+      //    （officialOk=true, next=null）就相信官方，不再用标题猜——否则又会误判。
+      if (!officialOk) {
+        try {
+          const r = await api('/search', { q: cur.base, limit: 30 });
+          let bestNum = Infinity;
+          const curStem = seasonStem(cur.base || '');
+          for (const it of r.results || []) {
+            const d = normalize(it);
+            if (!d.id || d.id === sid) continue;
+            const s = parseSeason(d.title);
+            if (s === null || s.num <= cur.num || s.num >= bestNum) continue;
+            if (seasonStem(d.title) !== curStem) continue;
+            bestNum = s.num;
+            next = d;
           }
+        } catch (e) {
+          next = null;
         }
-      } catch (e) {
-        next = null;
+      }
+
+      // 找到后异步预取下一季第 1 集（不阻塞返回）
+      if (next !== null) {
+        seasonDetail(next.id, meta.album_id).then((info) => {
+          if (info && info.firstVid) prewarm(info.firstVid, play.quality);
+        }).catch(() => {});
       }
       seasonCache.set(sid, { at: Date.now(), next });
       return { next, current: cur };
@@ -1197,21 +1351,37 @@
     for (const sid of keys) {
       const r = all[sid];
       if (!r || !r.base) continue;
+      const curNum = r.num || 1;
+      let found = null;
+      let officialOk = false;
+      // 官方「相关作品」优先：避免把标题相似的不同剧当成下一季
       try {
-        const res = await api('/search', { q: r.base, limit: 30 });
-        let found = null;
-        let best = Infinity;
-        for (const it of res.results || []) {
-          const d = normalize(it);
-          if (!d.id) continue;
-          const s = parseSeason(d.title);
-          if (s === null || s.num <= (r.num || 0) || s.num >= best) continue;
-          if (!sameBase(s.base, r.base)) continue;
-          best = s.num;
-          found = { seriesId: d.id, title: d.title, num: s.num, cover: d.cover, reserved: r };
+        const resp = await api('/series-seasons', { series_id: sid });
+        if (resp && resp.ok === true) {
+          officialOk = true;
+          const next = pickNextFromOfficial(resp.items, { base: r.base, num: curNum }, sid, r.title);
+          if (next) {
+            found = { seriesId: next.id, title: next.title, num: curNum + 1, cover: next.cover, reserved: r };
+          }
         }
-        if (found && found.num > (r.notifiedNum || 0)) hits.push(found);
-      } catch (e) { /* 单部查询失败不影响其它 */ }
+      } catch (e) { /* 接口不可用，走搜索兜底 */ }
+      if (!officialOk) {
+        try {
+          const res = await api('/search', { q: r.base, limit: 30 });
+          let best = Infinity;
+          const curStem = seasonStem(r.base || '');
+          for (const it of res.results || []) {
+            const d = normalize(it);
+            if (!d.id) continue;
+            const s = parseSeason(d.title);
+            if (s === null || s.num <= curNum || s.num >= best) continue;
+            if (seasonStem(d.title) !== curStem) continue;
+            best = s.num;
+            found = { seriesId: d.id, title: d.title, num: s.num, cover: d.cover, reserved: r };
+          }
+        } catch (e) { /* 单部查询失败不影响其它 */ }
+      }
+      if (found && found.num > (r.notifiedNum || 0)) hits.push(found);
     }
     return hits;
   }

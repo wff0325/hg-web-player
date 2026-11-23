@@ -47,17 +47,20 @@ const VIDEO_API_HOST = 'api5-normal-sinfonlinea.fqnovel.com';
  */
 const VIDEO_TAB_API = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/';
 
-/** GET 取址的 query：客户端版本必须与注册设备一致（7.3.9.32 / 73932）。 */
+/** GET 取址的 query：客户端版本必须跟上上游现行 APK（7.4.3.32 / 74332）。
+ *  2026-11-23 实测：旧的 73932/7.3.9.32 会返回 HTTP 200 空体；
+ *  对齐上游 N3urda/hongguoTV 0.16.12 的 videoTabRequest 参数后恢复。
+ *  注意 UA 仍保持 73932（上游 GET 的 UA 与 query 版本故意不一致）。 */
 const VIDEO_TAB_QUERY = {
   aid: '8662',
   app_name: 'novelread',
-  version_code: '73932',
-  version_name: '7.3.9.32',
+  version_code: '74332',
+  version_name: '7.4.3.32',
   channel: 'vivo_8662_64',
   device_platform: 'android',
   device_type: 'PGT-AN10',
   os_version: '12',
-  update_version_code: '73932',
+  update_version_code: '74332',
   video_id_type: '0',
   device_level: '1',
   need_all_video_definition: '1',
@@ -288,7 +291,9 @@ async function fetchVideoTabModel(vid, trace) {
     iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
   });
   const tSign = Date.now();
-  const signed = PureSign.signPlaybackV5(VIDEO_TAB_API, values, null, Date.now());
+  // GET video_tab：上游要求用「空字节体」签名（md5(空)），不是 null 的全零摘要。
+  // 传空 Buffer 让 bodyMd5Of 走 md5(空)；x-ss-stub 因 body 长度为 0 不会被设置。
+  const signed = PureSign.signPlaybackV5(VIDEO_TAB_API, values, Buffer.alloc(0), Date.now());
   const attemptInfo = {
     index: 1, route: 'video-tab', signMs: Date.now() - tSign,
     ticket: /_rticket=(\d+)/.exec(signed.url) !== null

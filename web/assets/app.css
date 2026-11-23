@@ -210,6 +210,34 @@ main { padding: 0 12px; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; padding: 20px 16px 10px; }
 .section-head h2 { margin: 0; font-size: 15px; }
 .muted { color: var(--muted); font-size: 12.5px; }
+/* 全季：横向滚动的季卡片，点击切到该季。多个同季版本都列出来，让用户自己选。 */
+.season-list {
+  display: flex; gap: 10px; padding: 0 16px 6px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.season-list::-webkit-scrollbar { display: none; }
+.season-list .season-item {
+  flex: 0 0 auto; width: 112px; padding: 7px; border-radius: 12px;
+  background: var(--bg-soft); cursor: pointer; transition: background .15s;
+}
+.season-list .season-item:active { background: var(--active); }
+.season-list .season-item.now { box-shadow: inset 0 0 0 2px var(--accent); }
+.season-list .season-item .si-cover {
+  width: 100%; aspect-ratio: 3/4; border-radius: 8px; object-fit: cover;
+  background: #20202a; display: block;
+}
+.season-list .season-item .si-cover-ph {
+  width: 100%; aspect-ratio: 3/4; border-radius: 8px; background: var(--accent-soft);
+  display: flex; align-items: center; justify-content: center; font-size: 22px;
+}
+.season-list .season-item .si-t {
+  margin-top: 6px; font-size: 12px; font-weight: 600; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.season-list .season-item .si-m { margin-top: 3px; font-size: 11px; color: var(--muted); }
+.season-list .season-item.now .si-m { color: var(--accent); }
+html[data-theme="light"] .season-list .season-item { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
+
 .ep-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 0 16px; }
 @media (min-width: 640px) { .ep-grid { grid-template-columns: repeat(10, 1fr); } }
 /* 详情页选集：保持原来的方形格子（用户反馈改小后不好点） */

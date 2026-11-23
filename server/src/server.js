@@ -657,6 +657,30 @@ class Server {
       return;
     }
 
+    // 官方「相关作品 / 同系列」：返回同一系列的其它季（含待上线）。
+    // 前端用它替代「按标题基名猜测」，避免把不同剧误判成同一系列
+    // （如「全球死考…二季」和「…第三季」其实是不同剧）。
+    if (method === 'GET' && pathname === '/series-seasons') {
+      const sid = q.series_id;
+      if (sid === undefined || sid === null || sid === '') {
+        Res.fail(req, res, 400, '缺少 series_id');
+        return;
+      }
+      const force = String(q.refresh || '') === '1';
+      const m = Json.obj();
+      try {
+        m.ok = true;
+        m.series_id = String(sid);
+        m.items = await Client.relatedWorks(sid, force);
+      } catch (e) {
+        m.ok = false;
+        m.error = e.message || '相关作品接口不可用';
+        m.items = [];
+      }
+      Res.json(req, res, 200, m);
+      return;
+    }
+
     // 官方时间轴弹幕。series_id 用作 business_param.book_id，vid 是本集 group_id，
     // 两者都要传；拿不到时返回 success:false + 中文说明（不是「本集没弹幕」）。
     if (method === 'GET' && pathname === '/danmaku') {
