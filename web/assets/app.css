@@ -62,8 +62,27 @@ body { padding-top: calc(52px + var(--safe-top)); padding-bottom: calc(8px + var
   backdrop-filter: blur(14px);
   border-bottom: 1px solid rgba(255,255,255,.05);
 }
-.brand { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; letter-spacing: .5px; }
-.brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.brand { display: flex; align-items: center; gap: 9px; }
+/* 品牌名：霓虹圆环图标 + 金橙→粉紫渐变发光字 */
+.brand-mark {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 8px var(--accent), inset 0 0 8px rgba(255,45,85,.5);
+}
+.brand-text {
+  font-size: 19px; font-weight: 800; letter-spacing: 1px;
+  background: linear-gradient(92deg, #ffd76a 0%, #ff8a5b 38%, #ff2d8e 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+  filter: drop-shadow(0 0 10px rgba(255,90,120,.4));
+}
+/* 浅色主题下发光字压在白底上偏淡，加深渐变保证可读 */
+html[data-theme="light"] .brand-text {
+  background: linear-gradient(92deg, #c98a12 0%, #e2563a 42%, #d81e63 100%);
+  -webkit-background-clip: text; background-clip: text;
+  filter: none;
+}
 .version-tag {
   font-size: 10px; font-weight: 500; letter-spacing: .3px; color: var(--muted);
   background: var(--bg-soft); border: 1px solid var(--line);
@@ -298,51 +317,12 @@ main { padding: 0 12px; }
   background: linear-gradient(180deg, rgba(0,0,0,.72), rgba(0,0,0,0));
   transition: opacity .25s;
 }
-/* 播放器永远是黑底，标题固定白字。
-   做成一枚玻璃质感胶囊：左侧渐变播放图标 + 剧名（超长省略）+ 集数标签。 */
+/* 播放器永远是黑底，标题固定白字 + 描边阴影 */
 .player-title {
   flex: 1; min-width: 0;
-  display: inline-flex; align-items: center; gap: 9px;
-  max-width: max-content;
-  padding: 5px 11px 5px 6px;
-  border-radius: 999px;
-  background: rgba(20,20,24,.42);
-  border: 1px solid rgba(255,255,255,.10);
-  box-shadow: 0 2px 10px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.08);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  color: #fff;
-}
-/* 左侧渐变播放图标 */
-.pt-badge {
-  flex: 0 0 auto; width: 24px; height: 24px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #ff7a59, #ff4d6d);
-  color: #fff;
-  box-shadow: 0 2px 6px rgba(255,77,109,.36);
-}
-/* 文字区：剧名 + 集数横排，整体超长时压缩剧名 */
-.pt-text {
-  flex: 1 1 auto; min-width: 0;
-  display: flex; align-items: center; gap: 8px;
-}
-.pt-name {
-  min-width: 0; max-width: 46vw;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 14px; font-weight: 600; letter-spacing: .2px;
-  text-shadow: 0 1px 2px rgba(0,0,0,.55);
-}
-/* 集数做成精致小标签 */
-.pt-ep {
-  flex: 0 0 auto; font-size: 11.5px; font-weight: 700;
-  padding: 2px 8px; border-radius: 999px;
-  background: rgba(255,255,255,.15);
-  border: 1px solid rgba(255,255,255,.10);
-  color: #fff; text-shadow: none; letter-spacing: .3px;
-  white-space: nowrap;
-}
-@media (max-width: 480px) {
-  .pt-name { max-width: 38vw; font-size: 13px; }
+  font-size: 14px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.75);
 }
 #qualityBtn { font-size: 12.5px; font-weight: 700; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,.14); color: #fff; width: auto; }
 .player-hint {
@@ -521,7 +501,7 @@ main { max-width: 1440px; margin: 0 auto; }
   main { padding: 0 28px; }
   body { padding-top: calc(108px + var(--safe-top)); }
   .topbar { padding-left: 28px; padding-right: 28px; }
-  .brand { font-size: 19px; }
+  .brand-text { font-size: 19px; }
   .tabs { padding-left: 28px; padding-right: 28px; }
   .detail-hero { max-width: 1080px; margin: 0 auto; padding-top: calc(64px + var(--safe-top)); }
   .detail-hero .hero-inner { gap: 22px; }
@@ -535,7 +515,8 @@ main { max-width: 1440px; margin: 0 auto; }
 
 /* 手机 <520 */
 @media (max-width: 519px) {
-  .brand { font-size: 16px; }
+  .brand-text { font-size: 16px; }
+  .brand-mark { width: 22px; height: 22px; }
   .detail-hero { padding-left: 14px; padding-right: 14px; }
   .intro { margin-left: 14px; margin-right: 14px; }
   .section-head, .ep-grid { padding-left: 14px; padding-right: 14px; }

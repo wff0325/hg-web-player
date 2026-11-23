@@ -652,19 +652,6 @@
    * 短标题静止居中，长标题来回滚动；外层 #playerTitle 的 textContent 仍是完整
    * 「剧名 · 第 N 集」，与旧实现一致（测试/无障碍依赖这点）。
    */
-  function setPlayerTitle(title, index) {
-    const box = $('playerTitle');
-    const nameEl = $('ptName');
-    const epEl = $('ptEp');
-    if (!box || !nameEl || !epEl) {
-      if (box) box.textContent = `${title || ''} · 第 ${index} 集`;
-      return;
-    }
-    nameEl.textContent = String(title || '');       // 剧名（超长由 CSS 省略号截断）
-    epEl.textContent = `第 ${index} 集`;              // 集数标签
-    nameEl.title = String(title || '');             // 悬停可看完整剧名
-  }
-
   async function playEpisode(index) {
     if (!detail.episodes.length) return;
     play.index = Math.min(Math.max(1, index), detail.episodes.length);
@@ -676,7 +663,7 @@
     player.hidden = false;
     document.body.style.overflow = 'hidden';
     history.replaceState(null, '', '#/w/' + detail.seriesId + '/' + play.index);
-    setPlayerTitle(detail.meta ? detail.meta.title : '', ep.index);
+    $('playerTitle').textContent = `${detail.meta ? detail.meta.title : ''} · 第 ${ep.index} 集`;
     $('qualityBtn').textContent = (play.quality || 'auto').replace('p', 'P');
     $('bigPlay').classList.add('hide');
     $('seekPlayed').style.width = '0%';
