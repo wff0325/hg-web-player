@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0b0b0f">
+<title>柏珩无敌了</title>
+<script>
+/* 首屏前先定主题，避免闪一下深色 */
+(function () {
+  try {
+    var m = JSON.parse(localStorage.getItem('mr.theme') || '"auto"');
+    var light = m === 'light' || (m === 'auto' && window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: light)').matches);
+    document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+  } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+})();
+</script>
+<link rel="stylesheet" href="assets/app.css?v=20261123e">
+</head>
+<body>
+
+<header class="topbar" id="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <span id="brandText">柏珩无敌了</span>
+    <span class="version-tag" id="versionTag" title="当前前端版本">{{APP_VERSION}}</span>
+  </div>
+  <div class="top-actions">
+    <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="跟随系统">
+      <svg viewBox="0 0 24 24" width="20" height="20" class="ic-auto"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4v16" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
+      <svg viewBox="0 0 24 24" width="20" height="20" class="ic-light" hidden><circle cx="12" cy="12" r="4.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <svg viewBox="0 0 24 24" width="20" height="20" class="ic-dark" hidden><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" fill="currentColor"/></svg>
+    </button>
+    <button class="icon-btn" id="searchBtn" aria-label="搜索">
+      <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <button class="icon-btn" id="updateBtn" aria-label="检查更新" title="检查更新">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M20 11a8 8 0 1 0-2.3 5.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 4v7h-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-view="home" data-arg="hot">热播榜</button>
+  <button class="tab" data-view="home" data-arg="real">真人剧</button>
+  <button class="tab" data-view="home" data-arg="comic">漫剧</button>
+  <button class="tab" data-view="home" data-arg="ai">AI剧</button>
+  <button class="tab" data-view="mine">我的</button>
+</nav>
+
+<main id="app">
+  <div class="grid" id="grid"></div>
+  <div class="sentinel" id="sentinel"></div>
+  <div class="list-status" id="status"></div>
+</main>
+
+<!-- 搜索页 -->
+<section class="page" id="searchPage" hidden>
+  <div class="search-bar">
+    <button class="icon-btn" id="searchBack" aria-label="返回">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <input id="searchInput" type="search" placeholder="搜索剧名、题材、标签" autocomplete="off">
+    <button class="text-btn" id="searchGo">搜索</button>
+  </div>
+  <div class="suggest" id="suggestList" hidden></div>
+  <div class="search-hist" id="searchHist" hidden></div>
+  <div class="hot-words" id="hotWords"></div>
+  <div class="grid" id="searchGrid"></div>
+  <div class="list-status" id="searchStatus"></div>
+</section>
+
+<!-- 详情页 -->
+<section class="page detail" id="detailPage" hidden>
+  <button class="back-fab" id="detailBack" aria-label="返回">
+    <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="detail-hero" id="detailHero">
+    <div class="hero-bg" id="heroBg"></div>
+    <div class="hero-inner">
+      <img id="detailCover" alt="">
+      <div class="hero-meta">
+        <h1 id="detailTitle"></h1>
+        <div class="chips" id="detailChips"></div>
+        <div class="hero-actions">
+          <button class="btn primary" id="playFirst">▶ 立即播放</button>
+          <button class="btn ghost" id="favBtn">收藏</button>
+          <button class="btn ghost" id="reserveBtn">预约下一季</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="intro" id="detailIntro"></p>
+  <div class="section-head">
+    <h2>选集</h2>
+    <span class="muted" id="epCount"></span>
+  </div>
+  <div class="ep-grid" id="epGrid"></div>
+</section>
+
+<!-- 播放器 -->
+<section class="player" id="player" hidden>
+  <video id="video" playsinline webkit-playsinline preload="metadata"></video>
+  <div class="dm-layer" id="dmLayer"></div>
+  <div class="player-top">
+    <button class="icon-btn light" id="playerBack" aria-label="返回">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="player-title" id="playerTitle">
+      <span class="pt-marquee" id="ptMarquee"><span class="pt-name" id="ptName"></span></span>
+      <span class="pt-ep" id="ptEp"></span>
+    </div>
+    <span class="sleep-badge" id="sleepBadge" hidden>定时</span>
+    <button class="icon-btn light" id="qualityBtn">1080P</button>
+  </div>
+  <div class="player-hint" id="playerHint" hidden>
+    <span class="spin"></span>
+    <span id="playerHintText">正在准备片源…</span>
+  </div>
+  <div class="player-center">
+    <button class="big-play" id="bigPlay" aria-label="播放">
+      <svg viewBox="0 0 24 24" width="42" height="42"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+    </button>
+  </div>
+  <div class="player-bottom">
+    <div class="seek" id="seek">
+      <div class="seek-track"><div class="seek-buffer" id="seekBuffer"></div><div class="seek-played" id="seekPlayed"></div><div class="seek-knob" id="seekKnob"></div></div>
+    </div>
+    <div class="controls">
+      <span class="time" id="timeLabel">00:00 / 00:00</span>
+      <div class="ctrl-right">
+        <button class="icon-btn light ctrl-ico" id="dmBtn" aria-label="弹幕开关" title="弹幕开关">
+          <svg class="ico-on" viewBox="0 0 24 24" width="20" height="20"><rect x="3" y="5" width="18" height="13" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="8.2" cy="11.5" r="1.15" fill="currentColor"/><circle cx="12" cy="11.5" r="1.15" fill="currentColor"/><circle cx="15.8" cy="11.5" r="1.15" fill="currentColor"/></svg>
+          <svg class="ico-off" viewBox="0 0 24 24" width="20" height="20"><rect x="3" y="5" width="18" height="13" rx="3.2" fill="none" stroke="currentColor" stroke-width="1.7" opacity=".55"/><path d="M5 19 19 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <button class="icon-btn light ctrl-ico" id="prevEp" aria-label="上一集" title="上一集">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M18 5.5v13L8.5 12z" fill="currentColor"/><rect x="5" y="5.5" width="2.4" height="13" rx="1.1" fill="currentColor"/></svg>
+        </button>
+        <button class="icon-btn light ctrl-ico" id="nextEp" aria-label="下一集" title="下一集">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 5.5v13L15.5 12z" fill="currentColor"/><rect x="16.6" y="5.5" width="2.4" height="13" rx="1.1" fill="currentColor"/></svg>
+        </button>
+        <button class="icon-btn light ctrl-ico" id="epBtn" aria-label="选集" title="选集">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 6.5h16M4 12h16M4 17.5h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <button class="icon-btn light ctrl-ico" id="fsBtn" aria-label="全屏" title="全屏">
+          <svg class="ico-in" viewBox="0 0 24 24" width="20" height="20"><path d="M4 9V4.6h4.4M20 9V4.6h-4.4M4 15v4.4h4.4M20 15v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg class="ico-out" viewBox="0 0 24 24" width="20" height="20"><path d="M9.4 4v5.4H4M14.6 4v5.4H20M9.4 20v-5.4H4M14.6 20v-5.4H20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-btn light ctrl-ico" id="toolsBtn" aria-label="工具" title="工具">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 7.5h9M17 7.5h3M4 16.5h4M12 16.5h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15" cy="7.5" r="2.1" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="10" cy="16.5" r="2.1" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <button class="lock-float" id="lockBtn" aria-label="锁定控件" title="锁定控件（防误触）">
+    <svg viewBox="0 0 24 24" width="20" height="20"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  </button>
+  <div class="speed-hold" id="speedHoldBadge" hidden>3× 快进中</div>
+  <div class="lock-bar" id="lockBar" hidden>
+    <button class="text-btn light" id="unlockBtn">
+      <svg viewBox="0 0 24 24" width="16" height="16"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 7.5-1.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      已锁定 · 点击解锁
+    </button>
+  </div>
+  <div class="quality-menu" id="qualityMenu" hidden></div>
+  <div class="quality-menu tools-menu" id="toolsMenu" hidden></div>
+  <div class="ep-sheet" id="epSheet" hidden>
+    <div class="ep-sheet-head">
+      <span id="epSheetTitle">选集</span>
+      <button class="text-btn light" id="epSheetClose">关闭</button>
+    </div>
+    <div class="ep-sheet-grid" id="epSheetGrid"></div>
+  </div>
+  <div class="next-season" id="nextSeasonBox" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+</section>
+
+<div class="update-banner" id="updateBanner" hidden>
+  <span class="ub-text">发现新版本，刷新即可使用</span>
+  <button class="ub-btn" id="ubRefresh">立即刷新</button>
+  <button class="ub-close" id="ubClose" aria-label="稍后">×</button>
+</div>
+
+<div class="season-notify" id="seasonNotify" hidden>
+  <span class="sn-emoji">🎉</span>
+  <span class="sn-text"></span>
+  <button class="sn-btn" id="snGo">去看看</button>
+  <button class="sn-close" id="snClose" aria-label="关闭">×</button>
+</div>
+
+<script src="config.js"></script>
+<script>
+/* 手动检查更新：顶栏按钮触发，不做后台轮询、不弹窗打扰。
+   点一下 → 后端从 GitHub 拉取最新前端文件覆盖本地 → 成功后刷新。
+   整个过程由用户主动发起，没有自动检测、没有定时轮询。 */
+window.MR_DO_UPDATE = function (cb) {
+  var cfg = window.MR_CONFIG || {};
+  var API = (cfg.API_BASE || '').replace(/\/+$/, '');
+  var KEY = cfg.API_KEY || '';
+  var url = API + '/sync-web';
+  var headers = { 'Content-Type': 'application/json', 'x-api-key': KEY };
+  fetch(url, { method: 'POST', headers: headers, body: '{}' })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var j = {};
+        try { j = JSON.parse(t); } catch (e) {}
+        return { okHttp: r.ok, status: r.status, body: j };
+      });
+    })
+    .then(function (res) {
+      if (res.okHttp && res.body && res.body.ok) {
+        if (cb) cb(true, res.body);
+      } else {
+        if (cb) cb(false, (res.body && (res.body.detail || res.body.error)) || ('HTTP ' + res.status));
+      }
+    })
+    .catch(function (e) { if (cb) cb(false, 'network'); });
+};
+</script>
+<script src="assets/app.js?v=20261123e"></script>
+</body>
+</html>
