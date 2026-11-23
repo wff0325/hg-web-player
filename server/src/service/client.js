@@ -18,7 +18,6 @@
 const crypto = require('crypto');
 const Json = require('../util/json');
 const Log = require('../util/log');
-const SearchCache = require('./search-cache');
 const Config = require('../util/config');
 const Crypto = require('../util/crypto');
 const Http = require('../util/http');
@@ -641,17 +640,14 @@ async function search(query, maxItemsArg) {
  * 上游无结果时返回空页；请求彻底失败（风控 / 网络 / 签名被拒）时抛错，
  * 由调用方决定兜底。
  */
-async function appSearchPage(query, limit, skipN, force) {
+async function appSearchPage(query, limit, skipN) {
   // 游标状态可复用：同一关键词的续页从头重抓上游，靠这里的缓存兜住重复请求
-  // force（每小时预热）时跳过，保证拉到上游最新结果。
   const ck = Safeguards.cacheKey('searchp', query, limit, skipN);
-  if (force !== true) {
-    const cached = Safeguards.cacheGet(ck);
-    if (Array.isArray(cached)) {
-      if (cached.length === 3 && Array.isArray(cached[0])) {
-        return new Page(cached[0], cached[1] === true,
-          Json.optInt(cached[2], skipN));
-      }
+  const cached = Safeguards.cacheGet(ck);
+  if (Array.isArray(cached)) {
+    if (cached.length === 3 && Array.isArray(cached[0])) {
+      return new Page(cached[0], cached[1] === true,
+        Json.optInt(cached[2], skipN));
     }
   }
 
@@ -666,7 +662,7 @@ async function appSearchPage(query, limit, skipN, force) {
   // 把上游从头翻一遍，这里把已累积的结果与上游游标按关键词缓存起来，
   // 后续续页从上次位置接着抓。缓存仅 10 分钟，避免结果集明显变化后仍给旧数据。
   const ckAll = Safeguards.cacheKey('searchacc', query);
-  const cachedAcc = force === true ? null : Safeguards.cacheGet(ckAll);
+  const cachedAcc = Safeguards.cacheGet(ckAll);
   if (Array.isArray(cachedAcc)) {
     if (cachedAcc.length === 6) {
       for (const x of (Array.isArray(cachedAcc[0]) ? cachedAcc[0] : [])) results.push(x);
@@ -748,36 +744,16 @@ async function appSearchPage(query, limit, skipN, force) {
  * 无后续页）。App 无结果或请求失败时回落官网；官网也无结果时，若 App
  * 是异常失败则把该异常抛给调用方，否则返回空页。
  */
-async function searchPage(query, maxItemsArg, skip, force) {
+async function searchPage(query, maxItemsArg, skip) {
   const limit = Math.max(1, Math.min(
     maxItemsArg > 0 ? maxItemsArg : Log.envInt('HG_SEARCH_MAX_ITEMS', 20), 40));
   const skipN = Math.max(0, skip);
 
-  // 磁盘持久化缓存：冷词要跨境 6~9 秒，命中只要 0.002 秒，重启也不丢。
-  // 预热任务传 force=true 时会跳过这里强制拉新，保证新剧/下一季能进缓存。
-  const ckDisk = 'sp|' + String(query) + '|' + limit + '|' + skipN;
-  const diskHit = SearchCache.get(ckDisk, force === true);
-  if (diskHit && Array.isArray(diskHit.items)) {
-    return new Page(diskHit.items, diskHit.hasMore === true,
-      Json.optInt(diskHit.nextSkip, skipN));
-  }
-
-  const page = await searchPageUncached(query, limit, skipN, force);
-  if (page && Array.isArray(page.items)) {
-    SearchCache.set(ckDisk, {
-      items: page.items, hasMore: page.hasMore, nextSkip: page.nextSkip,
-    });
-  }
-  return page;
-}
-
-/** 真正打上游的搜索（原来的 searchPage 主体）。 */
-async function searchPageUncached(query, limit, skipN, force) {
   // 官网搜索（精确，含同剧各季）与 App 搜索（模糊、量大）合并。
   // 只走 App 搜索时，搜「持械入宋」只命中第一季，第二~第十季完全搜不到；
   // 官网 /api/search/result 会把同剧各季一并列出，所以两边都取再合并去重。
   const ckWeb = Safeguards.cacheKey('websearch2', query);
-  let webItems = force === true ? null : Safeguards.cacheGet(ckWeb);
+  let webItems = Safeguards.cacheGet(ckWeb);
   if (!Array.isArray(webItems)) {
     try {
       const web = await WebSource.search(query);
@@ -792,7 +768,7 @@ async function searchPageUncached(query, limit, skipN, force) {
   let appPage = null;
   let appError = null;
   try {
-    appPage = await appSearchPage(query, limit, skipN, force);
+    appPage = await appSearchPage(query, limit, skipN);
   } catch (e) {
     appError = e;
     Log.warn('App 搜索失败，仅用官网结果 (' + query + ')：' + e.message);
