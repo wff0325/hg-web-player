@@ -48,6 +48,18 @@ function isDenied(rel) {
   return false;
 }
 
+/**
+ * 不进同步链路的路径：APK 等大二进制。
+ *
+ * 原因：本机（Botkeep 容器）从 raw.githubusercontent.com 拉 2MB blob 会稳定
+ * 抛 ECONNRESET，导致整次全量同步失败——一个文件拖垮全部更新。而 APK 本来
+ * 也不需要落在服务器上：客户端读 /tv/release.json 拿到地址后直接从 raw 下载，
+ * 所以这里直接跳过，既不占磁盘也不会拖垮同步。
+ */
+function isSkipped(rel) {
+  return /\.(apk|aab|zip|ipa)$/i.test(String(rel));
+}
+
 /** 判断文件是否可同步（路径安全 + 不在 DENY）。 */
 function safeRel(rel) {
   const s = String(rel).replace(/\\/g, '/').replace(/^\/+/, '');
@@ -140,6 +152,7 @@ async function sync(webDir) {
 
   const rels = [];
   for (const f of listed) {
+    if (isSkipped(f)) { Log.info('web-sync 跳过安装包 ' + f); continue; }
     const s = safeRel(f);
     if (s === null) { Log.info('web-sync 跳过 ' + f); continue; }
     rels.push(s);
@@ -190,4 +203,4 @@ async function sync(webDir) {
   return { ok: true, files: written, deleted, bytes: total, sha, restart: backendChanged };
 }
 
-module.exports = { sync, safeRel, DENY, latestSha, listTree };
+module.exports = { sync, safeRel, isSkipped, DENY, latestSha, listTree };
