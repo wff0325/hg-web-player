@@ -80,6 +80,10 @@ const FAVICON_SVG =
 /** 判断是否前端静态资源路径。 */
 function isStaticPath(pathname) {
   if (pathname === '/' || pathname === '/ui' || pathname === '/ui/') return true;
+  // 客户端在线更新的版本清单：必须免鉴权。4.3 设备在「拿到 api_key 之前」
+  // 就要能检查更新（首次安装/密钥轮换后都是这个场景），所以单独放行这一个
+  // 根路径的 json，而不是把 .json 全放开（避免 web 目录下别的 json 被裸奔）。
+  if (pathname === '/release.json') return true;
   return /\.(html|js|mjs|css|svg|png|jpg|jpeg|gif|ico|webp|woff2?|ttf|map|apk)$/i.test(pathname);
 }
 
