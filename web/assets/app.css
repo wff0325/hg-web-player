@@ -330,9 +330,35 @@ body.hero-bg-only .hero-scrim {
   display: flex; flex-direction: column; gap: 8px; padding: 10px 2px 12px;
 }
 .topic-bar[hidden] { display: none; }
-.filter-row { display: flex; align-items: baseline; gap: 8px; }
-.filter-label { flex: 0 0 64px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* 筛选摘要行：默认折叠，只占一行，点「筛选」展开全部标签 */
+.filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filter-open, .filter-reset {
+  flex: 0 0 auto; border: 1px solid var(--line); cursor: pointer;
+  border-radius: 999px; padding: 5px 12px; font-size: 12.5px; font-weight: 700;
+  background: var(--bg-soft); color: var(--text);
+}
+.filter-open em {
+  font-style: normal; background: var(--accent); color: #fff;
+  border-radius: 999px; padding: 0 5px; margin-left: 2px; font-size: 11px;
+}
+.filter-open .caret, .filter-label .caret { margin-left: 4px; font-size: 10px; opacity: .7; }
+.filter-reset { color: var(--muted); font-weight: 600; padding: 5px 10px; }
+.filter-summary { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.fs-tag {
+  font-size: 11.5px; padding: 4px 10px; border-radius: 999px;
+  background: var(--active); color: var(--accent); font-weight: 600;
+  white-space: nowrap;
+}
+
+.filter-row { display: flex; flex-direction: column; gap: 5px; padding: 2px 0; }
+.filter-label {
+  align-self: flex-start; border: 0; background: transparent; cursor: pointer;
+  padding: 2px 0; font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap;
+}
+.filter-label b { color: var(--accent); font-weight: 700; }
 .filter-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.filter-row.folded .filter-options { display: none; }
 .topic-chip {
   border: 0; cursor: pointer; border-radius: 999px;
   padding: 7px 13px; font-size: 12.5px; font-weight: 600;

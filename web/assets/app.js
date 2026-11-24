@@ -402,6 +402,20 @@
   /* 分类筛选：直接用 SDK shortFilterPanel 的官方筛选面板（体裁/主题/角色等 7 行），
      选中后走后端 shortFilter 重新取列表，不再拿已加载卡片的 tags 本地凑数。 */
   const FILTER_GENRE = { real: 'short_play', comic: 'comic_series', ai: 'ai_series' };
+  // 筛选面板展开态：默认整体折叠，只显示一行摘要；展开后每行也能单独收起。
+  const filterUI = { open: false, rows: {} };   // rows[key]=true 表示该行已展开
+
+  function selectedLabels(rows) {
+    const out = [];
+    rows.forEach((row) => {
+      const vals = home.selections[row.key] || [];
+      vals.forEach((v) => {
+        const opt = (row.options || []).find((o) => String(o.value !== undefined ? o.value : o.key || '') === String(v));
+        if (opt) out.push({ key: row.key, name: row.name, label: String(opt.name || opt.label || '') });
+      });
+    });
+    return out;
+  }
 
   async function renderTopicBar() {
     if (!topicBar) return;
@@ -415,28 +429,70 @@
       if (!rows.length) { topicBar.innerHTML = ''; topicBar.hidden = true; return; }
       topicBar.hidden = false;
       topicBar.className = 'topic-bar';
-      topicBar.innerHTML = rows.map((row) => `
-        <div class="filter-row">
-          <span class="filter-label">${esc(row.name)}</span>
-          <div class="filter-options">${row.options.slice(0, 16).map((o) => {
-            const val = String(o.value !== undefined ? o.value : o.key || '');
-            const on = (home.selections[row.key] || []).includes(val);
-            return `<button class="topic-chip${on ? ' active' : ''}" data-key="${esc(row.key)}" data-val="${esc(val)}">${esc(o.label)}</button>`;
-          }).join('')}</div>
-        </div>`).join('');
+      const chosen = selectedLabels(rows);
+      const extra = chosen.filter((x) => x.key !== 'sort');
+      const summary = chosen.map((x) => `<span class="fs-tag">${esc(x.label)}</span>`).join('');
+
+      if (!filterUI.open) {
+        // 折叠态：一行摘要 + 展开按钮，不再让几十个标签占满首屏
+        topicBar.innerHTML = `
+          <div class="filter-bar">
+            <button class="filter-open" data-act="open">筛选${extra.length ? ` <em>${extra.length}</em>` : ''} <span class="caret">▾</span></button>
+            <div class="filter-summary">${summary || '<span class="muted">全部</span>'}</div>
+          </div>`;
+      } else {
+        // 展开态：排序行默认展开，其余行按 rows[key] 决定
+        topicBar.innerHTML = `
+          <div class="filter-bar">
+            <button class="filter-open" data-act="close">收起筛选 <span class="caret">▴</span></button>
+            <button class="filter-reset" data-act="reset">重置</button>
+          </div>
+          ${rows.map((row) => {
+            const rowOpen = row.key === 'sort' || filterUI.rows[row.key] === true;
+            const vals = home.selections[row.key] || [];
+            const cur = vals.map((v) => {
+              const opt = (row.options || []).find((o) => String(o.value !== undefined ? o.value : o.key || '') === String(v));
+              return opt ? String(opt.name || opt.label || '') : '';
+            }).filter(Boolean).join('/');
+            return `<div class="filter-row${rowOpen ? '' : ' folded'}">
+              <button class="filter-label" data-act="row" data-key="${esc(row.key)}">${esc(row.name)}${cur ? ' · <b>' + esc(cur) + '</b>' : ''} <span class="caret">${rowOpen ? '▾' : '▸'}</span></button>
+              <div class="filter-options">${row.options.slice(0, 30).map((o) => {
+                const val = String(o.value !== undefined ? o.value : o.key || '');
+                const on = vals.includes(val);
+                return `<button class="topic-chip${on ? ' active' : ''}" data-key="${esc(row.key)}" data-val="${esc(val)}">${esc(o.label)}</button>`;
+              }).join('')}</div>
+            </div>`;
+          }).join('')}`;
+      }
+
       topicBar.onclick = (e) => {
+        const act = e.target.closest('[data-act]');
+        if (act) {
+          const a = act.dataset.act;
+          if (a === 'open') { filterUI.open = true; renderTopicBar(); return; }
+          if (a === 'close') { filterUI.open = false; renderTopicBar(); return; }
+          if (a === 'row') {
+            const k = act.dataset.key;
+            const isOpen = filterUI.rows[k] === undefined ? (k === 'sort') : filterUI.rows[k];
+            filterUI.rows[k] = !isOpen;
+            renderTopicBar(); return;
+          }
+          if (a === 'reset') {
+            home.selections = (home.view !== 'hot' && home.view !== 'series') ? { sort: ['hot_score'] } : {};
+            reloadCatalog(); return;
+          }
+        }
         const b = e.target.closest('.topic-chip');
         if (!b) return;
         const key = b.dataset.key, val = b.dataset.val;
         const cur = home.selections[key] || [];
         if (cur.includes(val)) {
-          delete home.selections[key];                       // 取消选中
-          // 取消的是默认排序「最高热度」时，恢复默认选中态，避免变成无序
+          delete home.selections[key];
           if (key === 'sort' && home.view !== 'hot' && home.view !== 'series') {
             home.selections.sort = ['hot_score'];
           }
         } else {
-          home.selections[key] = [val];                      // 单选
+          home.selections[key] = [val];
         }
         reloadCatalog();
       };
@@ -493,6 +549,8 @@
     // 热播榜与系列剧 tab 各自绑定官方榜单分类与默认榜；切回来时恢复各自的选择。
     const want = VIEW_RANK[view];
     if (want) { rankUI.content = want.content; rankUI.board = want.board; }
+    // 筛选面板每次切 tab 回到折叠态
+    filterUI.open = false; filterUI.rows = {};
     grid.innerHTML = ''; status.textContent = '';
     clearHomeExtras();
     if (view === 'mine') return renderMine();
