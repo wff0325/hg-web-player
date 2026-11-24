@@ -3103,23 +3103,30 @@
   }
 
   /** 自动检测版本变化：每 30 秒比对 /version 内容哈希，发现新版提示刷新。
-   *  解决浏览器缓存旧 app.js 导致「显示的不是最新」的问题。 */
+   *  坑：顶栏版本号是语义版本（v2.1.1），/version 返回的是内容哈希，
+   *  拿顶栏文本当初始值比，两者永远不等 → 每次打开页面都弹、刷新后又弹。
+   *  改为把「已确认的哈希」落到 localStorage，同一版本只提示一次。 */
+  const SEEN_HASH_KEY = 'mr.seenHash';
+  function markVersionSeen(hash) {
+    store.set(SEEN_HASH_KEY, String(hash || ''));
+  }
   function startVersionWatch() {
-    const vt = $('versionTag');
-    let current = vt ? String(vt.textContent || '').trim() : '';
+    let seen = String(store.get(SEEN_HASH_KEY, '') || '');
     setInterval(async () => {
       try {
         const r = await fetch(`${API}/version?t=` + Date.now(), { cache: 'no-store' });
         if (!r.ok) return;
         const j = await r.json();
-        const hash = String(j.version || '').slice(0, 12);
-        if (!hash || hash === current) return;
-        if (current === '') { current = hash; return; } // 首次只记录
-        current = hash;
+        const hash = String(j.version || '');
+        if (!hash) return;
+        if (!seen) { seen = hash; markVersionSeen(hash); return; }  // 首次只记录，不打扰
+        if (hash === seen) return;                                 // 已是当前版本
+        seen = hash;
+        markVersionSeen(hash);                                     // 先记下，避免同一版反复弹
         const banner = $('updateBanner');
         if (banner) {
           const txt = banner.querySelector('.ub-text');
-          if (txt) txt.textContent = '发现新版本（' + (j.display || hash.slice(0, 6)) + '），刷新即可使用';
+          if (txt) txt.textContent = '发现新版本（' + (j.display || hash.slice(0, 8)) + '），刷新即可使用';
           banner.hidden = false;
         }
       } catch (e) { /* 检测失败不影响使用 */ }
@@ -3152,6 +3159,8 @@
           // 顶栏版本号立即更新，让用户看得到更新结果
           const vt = $('versionTag');
           if (vt && ver) vt.textContent = ver;
+          // 手动更新后同步「已确认哈希」，否则刷新回来又被版本轮询判成新版本弹一次
+          if (info && info.version) markVersionSeen(info.version);
           if (info && info.restarting) {
             // 后端代码有更新，服务正在自动重启：等它起来再刷新，全程无需手动操作。
             toast('已更新 ' + n + ' 个文件，服务正在自动重启，请稍候…（版本 ' + ver + '）', 5000);
