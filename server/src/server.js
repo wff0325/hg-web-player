@@ -478,11 +478,12 @@ class Server {
         m.restart = r.restart === true;   // 后端文件有更新，需重启进程生效
         // 后端有变化：本进程会自动重启，告诉前端进入「等待重启」流程
         m.restarting = m.restart;
-        Res.json(req, res, 200, m);
+        // 关键：必须等响应真正 flush 到 socket（finish 事件）再重启，
+        // 否则 process.exit 会 reset 连接，前端拿到空响应误判为更新失败。
         if (m.restart) {
-          // 等响应 flush 完再拉起助手并退出，避免前端拿到半截响应
-          setTimeout(() => this.scheduleAutoRestart(), 200);
+          res.once('finish', () => setTimeout(() => this.scheduleAutoRestart(), 300));
         }
+        Res.json(req, res, 200, m);
       } catch (e) {
         Res.fail(req, res, 502, '更新失败：' + String((e && e.message) || e));
       }
