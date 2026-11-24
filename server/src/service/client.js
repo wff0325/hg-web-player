@@ -814,7 +814,11 @@ async function searchPage(query, maxItemsArg, skip) {
 /* ---------------- 官方「相关作品 / 同系列」接口（查全季） ---------------- */
 
 /**
- * 端点 /reading/bookapi/plan/v:version/，v3 签名，参数 from=detail_page_more_related。
+ * 端点 /reading/bookapi/plan/v:version/，v3 签名。
+ * 用详情页「系列剧」行的场景 from=single_col_same_ip_series（对齐
+ * beilunyang/openhongguo 的 SignedSeasonPairs），并带 scene=10、session_uuid、
+ * filter_ids=series_id、user_is_login=0。旧实现误用 from=detail_page_more_related，
+ * 拿到的是「同 IP 泛相关」（如 3D 版、罪名不朽），不是真正的同系列各季。
  * 返回同一系列的其它季（含待上线 type=1007）。
  *
  * 为什么需要：搜索结果里「全球死考：…考试二季」和「…考试第三季」其实是**不同剧**
@@ -839,12 +843,18 @@ function parseRelated(raw, currentId) {
   if (code !== 0) throw new Error('相关作品接口返回 code=' + code);
   const out = [];
   const seen = new Set();
-  for (const c of Json.optArr(root.data)) {
-    const cell = Json.optObj(c);
-    if (cell === null) continue;
-    const showType = Json.optInt(cell.show_type, -1);
-    const cellName = Json.optStr(cell.cell_name, '');
-    if (showType !== 547 && cellName !== '相关作品') continue;
+  // 官方 ParseSeasons 只认 show_type===547，不靠 cell_name 文本判断：
+  // 同一 show_type 的 cell 可能是「系列剧」(single_col_same_ip_series) 或
+  // 「相关作品」(detail_page_more_related)。旧实现写死 cell_name==='相关作品'，
+  // 导致正确的「系列剧」行被整段丢弃。这里两种都收，按「系列剧」优先。
+  const cells = Json.optArr(root.data).map(Json.optObj).filter((c) => c !== null
+    && Json.optInt(c.show_type, -1) === 547);
+  cells.sort((a, b) => {
+    const an = Json.optStr(a.cell_name, '') === '系列剧' ? 0 : 1;
+    const bn = Json.optStr(b.cell_name, '') === '系列剧' ? 0 : 1;
+    return an - bn;
+  });
+  for (const cell of cells) {
     for (const v of Json.optArr(cell.video_data)) {
       const row = Json.optObj(v);
       if (row === null) continue;
@@ -890,9 +900,13 @@ async function relatedWorks(seriesId, force) {
     if (Array.isArray(cached)) return cached;
   }
   const extra = {
-    scene: '10', from: 'detail_page_more_related', book_id: sid,
+    scene: '10', from: 'single_col_same_ip_series', book_id: sid,
+    // 官方抓包（openhongguo SignedSeasonPairs）明确带这三个，缺了可能拿不到「系列剧」行
+    filter_ids: sid,
+    session_uuid: crypto.randomUUID(),
+    user_is_login: '0',
     new_search_middle_page: 'false', bookstore_tab_type: '0',
-    query_history_removed: 'false', user_is_login: '0', bookstore_tab: '0',
+    query_history_removed: 'false', bookstore_tab: '0',
     search_middle_page_version: '0', pad_column_detail: '0',
     hot_word_exchange: 'false', device_level: '3', limit: '0', offset: '0',
     is_horizontal_screen: 'false', reader_single_col_from_ip_strategy: 'false',
