@@ -157,7 +157,16 @@
 
   /* ---------------- 首页 ---------------- */
   const home = { view: 'hot', page: 0, loading: false, done: false, items: [], selections: {} };
-  // 榜单状态：content=分类（全部/系列剧/漫剧/真人剧/AI剧），board=官方榜单 ID
+  // 顶部每个 tab 对应 SDK 的一个官方榜单分类，不再在热播榜二级栏里重复切分类。
+  // 漫剧/真人剧/AI剧 已提升为顶部 tab（comic/real/ai），这里只保留榜单维度的映射。
+  const VIEW_RANK = {
+    hot:    { content: 'all',              board: 'ranklist_hot_play_sc' },
+    series: { content: 'series_album',     board: 'series_album_hot_sc' },
+    real:   { content: 'human',            board: 'human_hot_play' },
+    comic:  { content: 'comic_series_rank',board: 'comic_series_hot_play' },
+    ai:     { content: 'ai_playlet',       board: 'ai_playlet_hot_play' },
+  };
+  // 榜单状态：content=分类，board=官方榜单 ID
   const rankUI = { content: 'all', board: 'ranklist_hot_play_sc', cursor: '', meta: null };
   const grid = $('grid'), status = $('status'), sentinel = $('sentinel');
   const homeHero = $('homeHero'), homeSections = $('homeSections'), topicBar = $('topicBar');
@@ -343,40 +352,32 @@
     }
   }
 
-  /* 热播榜二级切换栏：分类（全部/系列剧/漫剧/真人剧/AI剧）+ 该类下的官方榜单。
-     数据来自 shortRank 返回的 contents，共 30 个真实榜单，不再只有「推荐榜」。 */
+  /* 榜单切换栏：分类已提升到顶部 tab（热播榜=全部/系列剧/漫剧/真人剧/AI剧各一个 tab），
+     这里只保留当前分类下的官方榜单行（推荐榜/热播榜/新剧榜…），不再重复分类切换。 */
   function renderRankBar(meta) {
     if (!rankBar) return;
-    if (home.view !== 'hot' || !meta || !(meta.contents || []).length) {
+    const isRankView = home.view === 'hot' || home.view === 'series';
+    if (!isRankView || !meta || !(meta.contents || []).length) {
       rankBar.hidden = true; rankBar.innerHTML = ''; return;
     }
     const groups = meta.contents;
-    const g = groups.find((x) => x.id === rankUI.content) || groups[0];
-    rankUI.content = g.id;
+    const want = VIEW_RANK[home.view] || VIEW_RANK.hot;
+    const g = groups.find((x) => x.id === want.content) || groups[0];
     if (!(g.boards || []).some((b) => b.id === rankUI.board)) {
       rankUI.board = (g.boards && g.boards[0] && g.boards[0].id) || rankUI.board;
     }
     rankBar.hidden = false;
-    rankBar.innerHTML = `
-      <div class="rank-line">${groups.map((x) =>
-        `<button class="rank-chip${x.id === g.id ? ' on' : ''}" data-content="${esc(x.id)}">${esc(x.name)}</button>`).join('')}</div>
-      <div class="rank-line sub">${(g.boards || []).map((b) =>
-        `<button class="rank-chip${b.id === rankUI.board ? ' on' : ''}" data-board="${esc(b.id)}">${esc(b.name)}</button>`).join('')}</div>`;
+    rankBar.innerHTML = `<div class="rank-line">${(g.boards || []).map((b) =>
+      `<button class="rank-chip${b.id === rankUI.board ? ' on' : ''}" data-board="${esc(b.id)}">${esc(b.name)}</button>`).join('')}</div>`;
     rankBar.onclick = (e) => {
       const btn = e.target.closest('.rank-chip');
-      if (!btn) return;
-      if (btn.dataset.content) {
-        const next = groups.find((x) => x.id === btn.dataset.content);
-        const first = next && next.boards && next.boards[0];
-        reloadRank(btn.dataset.content, first ? first.id : rankUI.board);
-      } else if (btn.dataset.board) {
-        reloadRank(rankUI.content, btn.dataset.board);
-      }
+      if (!btn || !btn.dataset.board) return;
+      reloadRank(btn.dataset.board);
     };
   }
 
-  function reloadRank(content, board) {
-    rankUI.content = content; rankUI.board = board; rankUI.cursor = '';
+  function reloadRank(board) {
+    rankUI.board = board; rankUI.cursor = '';
     homeGen += 1;
     home.page = 0; home.loading = false; home.done = false; home.items = [];
     grid.innerHTML = ''; status.textContent = '';
@@ -399,7 +400,7 @@
 
   async function renderTopicBar() {
     if (!topicBar) return;
-    if (home.view === 'index' || home.view === 'hot' || home.view === 'mine') {
+    if (home.view === 'index' || home.view === 'hot' || home.view === 'series' || home.view === 'mine') {
       topicBar.innerHTML = ''; topicBar.hidden = true; return;
     }
     try {
@@ -467,8 +468,11 @@
     home.view = view; home.page = 0; home.loading = false; home.done = false; home.items = [];
     home.topic = ''; home.selections = {};
     // 榜单翻页游标必须清零：否则切走再点回热播榜会从上次的位置续取，
-    // 表现为「每次点击热播榜都换一批剧」。content/board 是用户选择，保留不动。
+    // 表现为「每次点击榜单 tab 都换一批剧」。
     rankUI.cursor = '';
+    // 热播榜与系列剧 tab 各自绑定官方榜单分类与默认榜；切回来时恢复各自的选择。
+    const want = VIEW_RANK[view];
+    if (want) { rankUI.content = want.content; rankUI.board = want.board; }
     grid.innerHTML = ''; status.textContent = '';
     clearHomeExtras();
     if (view === 'mine') return renderMine();
@@ -492,7 +496,7 @@
       let items = [];
       let more = false;
       let rankResult = null;
-      if (home.view === 'hot') {
+      if (home.view === 'hot' || home.view === 'series') {
         // 官方榜单每页只有 10~12 条，用 SDK cursor 续页，不再拿 offset×30 硬切
         const params = { board: rankUI.board, limit: 30 };
         if (rankUI.content && rankUI.content !== 'all') params.content = rankUI.content;
