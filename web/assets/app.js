@@ -1292,7 +1292,28 @@
   }
 
   /* ---------------- 播放器 ---------------- */
-  const player = $('player'), video = $('video');
+  const player = $('player');
+  // video 永远指向「当前正在播」的那个 <video>，videoBack 指向备用/预载的那个。
+  // 换集时交换这两个引用和 is-back 标记，下面 60 多处 video.* 与所有常驻事件
+  // 都不用改；预载好的下一集切回可见就能直接出画面，省掉 src/load() 的首帧等待。
+  let video = $('video'), videoBack = $('videoBack');
+
+  // 每个 <video> 各自维护一份「本集专用」监听（loadedmetadata/playing/error）。
+  // 元素被回收成备用前必须清干净，否则旧集残留监听会在下一集误触发降档/续播。
+  const dynListeners = new WeakMap();
+  function dynOn(el, type, fn, opts) {
+    el.addEventListener(type, fn, opts);
+    let arr = dynListeners.get(el);
+    if (!arr) dynListeners.set(el, arr = []);
+    arr.push([type, fn]);
+  }
+  function dynClear(el) {
+    const arr = dynListeners.get(el);
+    if (!arr) return;
+    for (let i = 0; i < arr.length; i++) el.removeEventListener(arr[i][0], arr[i][1]);
+    dynListeners.set(el, []);
+  }
+
   const play = {
     seriesId: '', index: 0, quality: CFG.DEFAULT_QUALITY || '1080p', speed: 1,
     idleTimer: 0, seekDragging: false,
@@ -1366,6 +1387,83 @@
     fetch(`${API}/cache/keep?${qs.toString()}`).catch(() => {});
   }
 
+  /* ---------------- 无缝换集：后台预载下一集 ----------------
+     当前集真正开始播放后才启动，避免抢当前集的取址/解密队列。
+     只预载紧邻的下一集；预载失败不打扰用户，换集时照旧走 loadSource 兜底。
+     /stream 命中缓存只要 5~15ms，剩下那些「卡一下」全是 video.load() 解析
+     元数据 + 解码首帧的开销，所以要把解码提前到播放过程中做完。 */
+  let nextPreloadToken = 0;
+  let nextPreloaded = null;   // { vid, quality, el }
+
+  function resetNextPreload() {
+    nextPreloadToken += 1;
+    nextPreloaded = null;
+  }
+
+  function preloadNextEpisode() {
+    if (player.hidden || !detail.episodes.length || play.index >= detail.episodes.length) return;
+    const ep = detail.episodes[play.index];   // 0-based：当前 index+1 就是下一集
+    if (!ep || !ep.vid) return;
+    const vid = String(ep.vid);
+    if (nextPreloaded && nextPreloaded.vid === vid && nextPreloaded.quality === play.quality) return;
+
+    const token = ++nextPreloadToken;
+    nextPreloaded = null;
+    const el = videoBack;
+    dynClear(el);                 // 清掉它当「当前集」时残留的监听
+    el.pause();
+    el.playbackRate = play.speed;
+    el.volume = video.volume;
+    el.muted = video.muted;
+    const markReady = () => {
+      if (token !== nextPreloadToken || el !== videoBack || el.readyState < 2) return;
+      nextPreloaded = { vid, quality: play.quality, el };
+    };
+    dynOn(el, 'loadeddata', markReady);
+    dynOn(el, 'canplay', markReady);
+    el.src = streamUrl(vid, play.quality);
+    el.load();
+  }
+
+  /** 目标集已经在备用播放器里解码好就直接互换，返回 true 表示完全跳过 loadSource。 */
+  function trySeamless(index) {
+    const ep = detail.episodes[index - 1];
+    if (!ep || !ep.vid) return false;
+    const hit = nextPreloaded;
+    if (!hit || hit.vid !== String(ep.vid) || hit.quality !== play.quality
+        || hit.el !== videoBack || videoBack.readyState < 2 || videoBack.error) return false;
+
+    // 进度必须在 play.index 改写之前存；force 绕过 ended 的早退
+    saveProgress(true);
+    loadToken += 1;             // 让旧集还在飞的 probe / 解码兜底全部失效
+    netRetry = 0;
+    nextPreloadToken += 1;      // 防止刚换上来的元素再被 markReady 写回旧状态
+    const old = video, incoming = videoBack;
+    const keepVol = old.volume, keepMuted = old.muted;
+
+    // 先交换身份，再收拾旧元素：这样旧元素 pause 时常驻监听的
+    // `e.target !== video` 守卫会把事件丢掉，不会闪大播放键、也不会错存进度。
+    old.id = 'videoBack';
+    incoming.id = 'video';
+    old.classList.add('is-back');
+    incoming.classList.remove('is-back');
+    video = incoming;
+    videoBack = old;
+    nextPreloaded = null;
+
+    old.pause();
+    dynClear(old);
+    old.removeAttribute('src');
+    old.load();
+    old.style.cssText = '';
+
+    video.volume = keepVol;
+    video.muted = keepMuted;
+    video.playbackRate = play.speed;
+    hideHint();
+    return true;
+  }
+
   /**
    * 播放器标题：剧名跑马灯 + 集数徽章。
    * 短标题静止居中，长标题来回滚动；外层 #playerTitle 的 textContent 仍是完整
@@ -1373,6 +1471,8 @@
    */
   async function playEpisode(index) {
     if (!detail.episodes.length) return;
+    // 备用播放器里已经解码好的集直接切过去；必须在 play.index 改写前判断
+    const seamless = trySeamless(index);
     play.index = Math.min(Math.max(1, index), detail.episodes.length);
     const ep = currentEp();
     if (!ep) return;
@@ -1392,9 +1492,22 @@
     const hist = records.history()[detail.seriesId];
     const resume = hist && hist.index === ep.index ? hist.t : 0;
 
-    showHint(`正在准备 ${(play.quality || '').toUpperCase()} 片源，首次播放需服务端解密`);
-    loadSource(ep.vid, play.quality, resume, true);
-    loadDanmaku(ep.vid);      // 弹幕与片源并行拉，互不阻塞
+    if (seamless) {
+      // 画面已经在备用元素里解码好了：不碰 src、不 load()，也不弹「正在准备」。
+      // 只需把弹幕时间轴接到新集，然后立刻起播。
+      loadDanmaku(ep.vid);
+      dmAlign();
+      if (resume > 3 && resume < (video.duration || 0) - 5) {
+        video.currentTime = resume;
+        toast(`已续播 ${fmtTime(resume)}`);
+        dmAlign();
+      }
+      video.play().catch(() => { $('bigPlay').classList.remove('hide'); });
+    } else {
+      showHint(`正在准备 ${(play.quality || '').toUpperCase()} 片源，首次播放需服务端解密`);
+      loadSource(ep.vid, play.quality, resume, true);
+      loadDanmaku(ep.vid);    // 弹幕与片源并行拉，互不阻塞
+    }
 
     // 看一集就往后预热 5 集 + 弹幕预取 + 标记活跃：当前集一开始加载就排队，
     // 不再依赖 playing 事件（禁自动播放 / 用户暂停时 playing 不来，预热就永远不发）。
@@ -1418,6 +1531,10 @@
         keepCacheWindow(windowIds);            // 预热排队后再标记一次活跃
       }, 3000);
     }
+
+    // 无缝切过来的这一集已经能播，立刻排上下一集的预载；
+    // 常规路径则等 playing 事件再预载，避免和当前集抢取址队列。
+    if (seamless) preloadNextEpisode();
 
     renderEpisodes();
     updateQualityMenu();
@@ -1477,7 +1594,6 @@
     video.playbackRate = play.speed;   // 切集/切清晰度后保持倍速
 
     const onMeta = () => {
-      video.removeEventListener('loadedmetadata', onMeta);
       if (video.playbackRate !== play.speed) video.playbackRate = play.speed;
       if (resume > 3 && resume < (video.duration || 0) - 5) {
         video.currentTime = resume;
@@ -1486,9 +1602,9 @@
       dmAlign();                 // 弹幕时间轴对齐到本集（续播点），不清屏
       video.play().catch(() => { $('bigPlay').classList.remove('hide'); });
     };
-    video.addEventListener('loadedmetadata', () => { hideHint(); }, { once: true });
-    video.addEventListener('loadedmetadata', onMeta, { once: true });
-    video.addEventListener('playing', () => {
+    dynOn(video, 'loadedmetadata', () => { hideHint(); }, { once: true });
+    dynOn(video, 'loadedmetadata', onMeta, { once: true });
+    dynOn(video, 'playing', () => {
       hideHint();
       // 兜底：设备没有 HEVC 解码器时，浏览器不会报错，只会「有声音没画面」
       // （videoWidth 恒为 0）。这种情况才提示换 360P，避免误伤能播的机器。
@@ -1506,7 +1622,7 @@
       }, 4000);
     }, { once: true });
 
-    video.addEventListener('error', () => {
+    dynOn(video, 'error', () => {
       if (token !== loadToken) return;
       hideHint();
       const code = video.error ? video.error.code : 0;
@@ -1541,20 +1657,26 @@
     updateSleepBadge();
     setLocked(false);
     if (detail.seriesId) history.replaceState(null, '', '#/d/' + detail.seriesId);
+    resetNextPreload();        // 关播放器时把后台预载一起撤掉，别留着占缓存/占解码器
     video.pause();
     video.removeAttribute('src');
     video.load();
+    dynClear(video);
+    videoBack.pause();
+    videoBack.removeAttribute('src');
+    videoBack.load();
+    dynClear(videoBack);
     player.hidden = true;
     // 关播放器后若还停在详情页，body 要继续锁住（详情页自己滚）
     document.body.style.overflow = detailPage.hidden ? '' : 'hidden';
     renderEpisodes();
   }
 
-  function saveProgress() {
+  function saveProgress(force) {
     const ep = currentEp();
     if (!ep || !detail.seriesId) return;
     const t = video.currentTime || 0;
-    if (!t || video.ended) return;
+    if (!t || (!force && video.ended)) return;
     const hist = records.history();
     hist[detail.seriesId] = {
       id: detail.seriesId,
@@ -2222,7 +2344,7 @@
     if (ep) {
       showHint(`正在切换 ${q.toUpperCase()}，首次切换需服务端解密`);
       loadSource(ep.vid, q, t, true);
-      if (!paused) video.addEventListener('playing', () => video.play().catch(() => {}), { once: true });
+      if (!paused) dynOn(video, 'playing', () => video.play().catch(() => {}), { once: true });
     }
     $('qualityMenu').hidden = true;
     toast('已切换到 ' + Q_LABEL[q]);
@@ -2842,31 +2964,41 @@
     }, 2600);
   }
 
-  video.addEventListener('timeupdate', () => {
-    if (play.seekDragging) return;
+  // 常驻事件同时挂在两个 <video> 上；e.target 不是当前激活元素的事件一律丢弃。
+  // 这样换集时交换 video/videoBack 引用即可，不必重新解绑、重绑 8 类事件。
+  const isActive = (e) => e.target === video;
+  function onVideoTimeUpdate(e) {
+    if (!isActive(e) || play.seekDragging) return;
     const d = video.duration || 0;
     const pct = d ? (video.currentTime / d) * 100 : 0;
     $('seekPlayed').style.width = pct + '%';
     $('seekKnob').style.left = pct + '%';
     $('timeLabel').textContent = `${fmtTime(video.currentTime)} / ${fmtTime(d)}`;
-  });
-  video.addEventListener('progress', () => {
+  }
+  function onVideoProgress(e) {
+    if (!isActive(e)) return;
     const d = video.duration || 0;
     if (!d || !video.buffered.length) return;
     $('seekBuffer').style.width = ((video.buffered.end(video.buffered.length - 1) / d) * 100) + '%';
-  });
-  video.addEventListener('play', () => {
+  }
+  function onVideoPlay(e) {
+    if (!isActive(e)) return;
     $('bigPlay').classList.add('hide'); showControls();
     dmFreeze(false);   // 恢复播放：画面上冻住的弹幕继续飞
-  });
-  video.addEventListener('pause', () => {
+    preloadNextEpisode();   // 当前集开播后才预载下一集，不抢取址队列
+  }
+  function onVideoPause(e) {
+    if (!isActive(e)) return;
     $('bigPlay').classList.remove('hide'); player.classList.remove('idle'); saveProgress();
     dmFreeze(true);    // 暂停播放：弹幕动画一起冻结，不再滚
-  });
-  video.addEventListener('ended', () => { saveProgress(); nextEpisode(true); });
-
-  $('bigPlay').addEventListener('click', () => video.play().catch(() => {}));
-  video.addEventListener('click', () => {
+  }
+  function onVideoEnded(e) {
+    if (!isActive(e)) return;
+    saveProgress(true);    // ended 时 currentTime 已到末尾，forced 存最后一帧位置
+    nextEpisode(true);
+  }
+  function onVideoClick(e) {
+    if (!isActive(e)) return;
     // 刚才只是「点外面收面板」，不要顺带暂停
     if (play.panelSwallow) { play.panelSwallow = false; return; }
     // 长按三倍速结束后浏览器还会补一个 click，这里吞掉，否则会顺带暂停
@@ -2875,7 +3007,17 @@
     if (video.paused) video.play().catch(() => {});
     else { video.pause(); }
     showControls();
-  });
+  }
+  for (const el of [video, videoBack]) {
+    el.addEventListener('timeupdate', onVideoTimeUpdate);
+    el.addEventListener('progress', onVideoProgress);
+    el.addEventListener('play', onVideoPlay);
+    el.addEventListener('pause', onVideoPause);
+    el.addEventListener('ended', onVideoEnded);
+    el.addEventListener('click', onVideoClick);
+  }
+
+  $('bigPlay').addEventListener('click', () => video.play().catch(() => {}));
   player.addEventListener('mousemove', showControls);
   player.addEventListener('touchstart', showControls, { passive: true });
 
@@ -3309,10 +3451,16 @@
     play.crossSeason = store.get('mr.crossSeason', false) === true;
     renderToolsMenu();
     const savedVol = Number(store.get('mr.vol', NaN));
-    if (savedVol >= 0 && savedVol <= 1) video.volume = savedVol;
-    video.addEventListener('volumechange', () => {
-      if (!video.muted) store.set('mr.vol', video.volume);
-    });
+    if (savedVol >= 0 && savedVol <= 1) {
+      video.volume = savedVol;
+      videoBack.volume = savedVol;
+    }
+    for (const el of [video, videoBack]) {
+      el.addEventListener('volumechange', (e) => {
+        if (e.target !== video || video.muted) return;
+        store.set('mr.vol', video.volume);
+      });
+    }
     resetHome('index');
     routeFromHash();
     maybeCheckReservations();   // 预约的剧若已上线下一季，顶部提醒

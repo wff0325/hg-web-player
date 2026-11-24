@@ -1,4 +1,4 @@
 {
-  "version": "v2.2.1",
-  "note": "缓存策略改为「全局 20 个 + 按观看时间 LRU」，并把预取从后 2 集扩大到后 5 集（看一集自动备好后面 5 集）。修复多设备互相删缓存的 bug：旧逻辑 keepWindow 按前端「本集+后两集」白名单删窗口外文件，A 设备换集就把 B 设备正在看的剧删了；现在 keepWindow 只把白名单当作「刚观看」刷新 mtime、不删任何文件，缓存命中播放也刷新 mtime，超过 20 个时 pruneCache 按观看时间淘汰最久没看的。config.cache.max_files 60→20，前端 PREWARM_AHEAD=5（窗口=本集+后5集，slice(1) 的 5 集预热）。实测：5 集约 10 秒全部落盘并保持；单测验证 LRU 按观看时间淘汰、多设备交替 keepWindow 互不删。"
+  "version": "v2.2.2",
+  "note": "无缝换集：新增第二个 <video> 作备用播放器，当前集真正开始播放（playing）后就在后台预载紧邻下一集并解码首帧（/stream 命中缓存 5~15ms，等待全在 video.load() 解析元数据+解首帧）。换集时若备用元素已 canplay（readyState>=2）则直接互换 video/videoBack 引用、id 与 is-back 标记，旧元素 pause+清 src 回收，新元素立即 play，全程不碰 src、不 load()、不弹「正在准备」，实测连 1 秒都不用等。65 处 video.* 引用和 8 类常驻事件靠交换引用复用，常驻监听同时挂两个元素并用 e.target===video 守卫；本集专用监听（loadedmetadata/playing/error）用 dynOn 登记，回收前 dynClear 清干净，避免旧集降档/续播误触发。进度在换集前 force 保存（绕过 ended 早退），倍速/音量/静音/旋转画面/弹幕时间轴全部跨集保持；手动选集点中已预载的剧集同样无缝。未预载好或清晰度不匹配时自动回退原 loadSource 链路。v2.2.1 的 20 个缓存 + 观看时间 LRU + 预取后 5 集 + 多设备不互删策略保持不变。"
 }

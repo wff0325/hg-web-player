@@ -132,6 +132,8 @@
 <!-- 播放器 -->
 <section class="player" id="player" hidden>
   <video id="video" playsinline webkit-playsinline preload="metadata"></video>
+  <!-- 无缝换集用的备用播放器：当前集播放时在后台预载下一集，换集时与 #video 互换身份 -->
+  <video id="videoBack" class="is-back" playsinline webkit-playsinline preload="auto"></video>
   <div class="dm-layer" id="dmLayer"></div>
   <div class="player-top">
     <button class="icon-btn light" id="playerBack" aria-label="返回">
