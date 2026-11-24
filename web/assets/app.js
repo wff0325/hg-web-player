@@ -1396,14 +1396,20 @@
     // 后端取址队列区分优先级：预热是 low，排在用户点播（high）后面，
     // 提前排队不会抢当前集的取址位，但用户点下一集时缓存多半已就绪。
     // 缓存只留「本集 + 后两集」三集，再往前的一律顶替掉（磁盘不无限涨）。
-    const myToken = loadToken;
+    // 注意：这里绝不能用 loadToken 做竞态守卫——loadSource 里的重试/降清晰度
+    // 都会 ++loadToken（见 loadSource 首行），首播慢时 3 秒内几乎必然重试，
+    // 结果整个「预热 + 滚动删除」被跳过，表现就是「后两集没缓存、旧缓存不删」。
+    // 改用只在换集时才递增的 windowSeq：同一集内的源重试不影响窗口任务。
+    const myWindow = ++windowSeq;
     const windowIds = cacheWindow(play.index);
     if (windowIds.length > 1) {
+      // 立即淘汰窗口外的旧缓存，不依赖 3 秒定时器能否跑起来（避免再次漏删）。
+      keepCacheWindow(windowIds);
       setTimeout(() => {
-        if (myToken !== loadToken || player.hidden) return;
+        if (myWindow !== windowSeq || player.hidden) return;
         for (const vid of windowIds.slice(1)) prewarm(vid, play.quality);
         prefetchDanmaku(windowIds.slice(1));   // 后两集弹幕先拉到内存，换集零等待
-        keepCacheWindow(windowIds);            // 窗口外的旧缓存让位
+        keepCacheWindow(windowIds);            // 预热排队后再兜底一次
       }, 3000);
     }
 
@@ -1416,6 +1422,8 @@
   /* 播放源加载：区分「解码不支持」与「网络/解密慢」，后者绝不降档 */
   let loadToken = 0;
   let netRetry = 0;
+  // 缓存窗口/预热的竞态守卫：只在「换集」时递增，不受同集内 loadSource 重试影响。
+  let windowSeq = 0;
 
   /* 探测这个 URL 给的是视频还是错误 JSON。
      注意：360P 是后端 302 到 CDN，跨域重定向会让 fetch 抛错（CORS），

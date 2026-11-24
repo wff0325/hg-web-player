@@ -15,10 +15,15 @@
  */
 const path = require('path');
 const fs = require('fs');
+const Config = require('../util/config');
+const Log = require('../util/log');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const ENTRY = path.join(ROOT, 'vendor', 'openhongguo', 'index.js').replace(/\\/g, '/');
 const PROFILE = path.join(ROOT, 'server', 'config', 'ohg-anonymous.json');
+// 磁盘缓存：进程重启后仍命中，消除首页 ~8s 的冷启动（榜单/分类/批量详情）。
+// 落在 server/config/ 下，受 web-sync 的 DENY 保护，不会被内置更新覆盖。
+const DISK_CACHE = path.join(ROOT, 'server', 'config', 'ohg-cache.json');
 
 let clientPromise = null;
 let sdkModule = null;
@@ -78,11 +83,86 @@ const inflight = new Map();     // key -> Promise
 let cacheHits = 0;
 let cacheMisses = 0;
 
+/* ---------------- 磁盘缓存（冷启动提速） ----------------
+ * 榜单/分类/批量详情这些首页数据分钟级不变，且每次进程重启都要重新拉，
+ * 是「首页冷启动 8 秒」的主因。把内存缓存按 TTL 落盘，重启后直接命中。
+ * - 只落 CACHE_TTL 里声明的方法；resolvePlayback 等 NO_CACHE 永不落盘。
+ * - 落盘节流 1 秒，原子写（临时文件 + rename），避免半截 JSON。
+ * - 恢复时按磁盘保存时间重新计算 TTL：过期的直接丢弃。
+ * - 磁盘 TTL 与内存 TTL 独立，用 runtime.sdk_disk_cache_ttl_hours 可调（默认 6h）。
+ */
+const DISK_FLUSH_MS = 1000;
+let diskDirty = false;
+let diskTimer = null;
+let diskLoaded = false;
+let diskEntries = 0;
+let diskSaveCount = 0;
+
+function diskTtlMs() {
+  const h = Number(Config.num('runtime.sdk_disk_cache_ttl_hours', 6));
+  return h * 3600e3;   // 0 = 关闭磁盘缓存（落盘与恢复都跳过）
+}
+
+function diskLoad() {
+  if (diskLoaded) return;
+  diskLoaded = true;
+  if (diskTtlMs() <= 0) return;   // 显式关闭
+  try {
+    if (!fs.existsSync(DISK_CACHE)) return;
+    const raw = JSON.parse(fs.readFileSync(DISK_CACHE, 'utf8'));
+    const rows = Array.isArray(raw && raw.entries) ? raw.entries : [];
+    const ttl = diskTtlMs();
+    const now = Date.now();
+    for (const row of rows) {
+      if (!row || typeof row.k !== 'string' || !row.v) continue;
+      if (typeof row.t !== 'number' || now - row.t >= ttl) continue; // 磁盘过期
+      // 恢复进内存时把 at 记为 now，让内存 TTL 重新计时；磁盘 TTL 已在上行把关。
+      cache.set(row.k, { at: now, value: row.v });
+      diskEntries++;
+    }
+    if (rows.length) Log.info('SDK 磁盘缓存已加载 ' + diskEntries + ' 条（首页冷启动可直接命中）');
+  } catch (e) {
+    // 缓存损坏不影响启动，当作没有缓存
+    Log.warn('SDK 磁盘缓存读取失败（忽略）：' + (e && e.message ? e.message : e));
+  }
+}
+
+function diskFlush() {
+  diskTimer = null;
+  if (!diskDirty || diskTtlMs() <= 0) { diskDirty = false; return; }
+  diskDirty = false;
+  try {
+    const now = Date.now();
+    const entries = [];
+    for (const [k, hit] of cache) {
+      const m = k.split(':', 1)[0];
+      if (!CACHE_TTL[m] || NO_CACHE.has(m)) continue;
+      entries.push({ k, t: now, v: hit.value });
+    }
+    fs.mkdirSync(path.dirname(DISK_CACHE), { recursive: true });
+    const tmp = DISK_CACHE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ saved_at: now, entries }));
+    fs.renameSync(tmp, DISK_CACHE);
+    diskEntries = entries.length;
+    diskSaveCount++;
+  } catch (e) {
+    Log.warn('SDK 磁盘缓存落盘失败（忽略）：' + (e && e.message ? e.message : e));
+  }
+}
+
+function scheduleDiskFlush() {
+  diskDirty = true;
+  if (diskTimer !== null) return;
+  diskTimer = setTimeout(diskFlush, DISK_FLUSH_MS);
+  if (diskTimer.unref) diskTimer.unref();
+}
+
 function cacheKey(m, args) {
   try { return m + ':' + JSON.stringify(args); } catch (e) { return m + ':' + String(args); }
 }
 
 function cacheGet(key, ttl) {
+  if (!diskLoaded) diskLoad();
   const hit = cache.get(key);
   if (hit !== null && hit !== undefined && Date.now() - hit.at < ttl) {
     cacheHits++;
@@ -99,6 +179,9 @@ function cachePut(key, value) {
     const oldest = cache.keys().next().value;
     cache.delete(oldest);
   }
+  // 只有声明 TTL 的方法才落盘；resolvePlayback 等敏感数据不碰磁盘
+  const m = key.split(':', 1)[0];
+  if (CACHE_TTL[m] && !NO_CACHE.has(m)) scheduleDiskFlush();
 }
 
 const api = {};
@@ -130,12 +213,20 @@ for (const m of METHODS) {
 /** 缓存统计（供 /health 与验证用）。 */
 function cacheStats() {
   return { entries: cache.size, hits: cacheHits, misses: cacheMisses,
+    disk_entries: diskEntries, disk_saves: diskSaveCount,
     hitRate: cacheHits + cacheMisses > 0
       ? Math.round(cacheHits * 100 / (cacheHits + cacheMisses)) + '%' : '0%' };
 }
 
 /** 清空缓存（内置更新后或手动刷新用）。 */
-function cacheClear() { cache.clear(); cacheHits = 0; cacheMisses = 0; }
+function cacheClear() {
+  cache.clear(); cacheHits = 0; cacheMisses = 0;
+  // 同时清磁盘，避免更新后仍命中旧版数据
+  try {
+    if (fs.existsSync(DISK_CACHE)) fs.unlinkSync(DISK_CACHE);
+    diskEntries = 0;
+  } catch (e) { /* 忽略 */ }
+}
 for (const m of GENERATORS) {
   api[m] = async function* (...args) {
     const c = await getClient();
