@@ -188,6 +188,21 @@ function sortByHeat(items) {
     .map((o) => o.x);
 }
 
+/**
+ * 用户选了官方排序（最新上架/最高热度/最高收藏/时间范围）时，
+ * SDK 已经按该规则排好，绝不能再按 heat 重排，否则三个选项看起来完全一样。
+ * 只有默认「全部推荐」才按红果热度降序。
+ */
+function hasOfficialSort(sel) {
+  if (!sel || typeof sel !== 'object') return false;
+  return Object.prototype.hasOwnProperty.call(sel, 'sort')
+    || Object.prototype.hasOwnProperty.call(sel, 'online_time');
+}
+async function orderItems(raw, sel) {
+  const enriched = await enrichRows(raw);
+  return hasOfficialSort(sel) ? enriched : sortByHeat(enriched);
+}
+
 /* ---------------- 搜索 / 发现 ---------------- */
 
 async function search(query, limit, filters) {
@@ -474,7 +489,7 @@ async function filterPanel(genre) {
 async function shortFilter(query, limit) {
   const page = await Ohg.shortFilter(query || {});
   const raw = (page.items || []).slice(0, limit > 0 ? limit : 30);
-  const items = sortByHeat(await enrichRows(raw));
+  const items = await orderItems(raw, query && query.selections);
   return { count: items.length, items, has_more: page.has_more === true,
     next_offset: 0, cursor: String(page.cursor || '') };
 }
@@ -494,11 +509,11 @@ async function catalog(channel, pageNum, perPage, selections) {
     ? selections : {};
   const q = { selections: Object.assign({ genre: [genre] }, sel) };
 
-  // 单页请求（首页首屏只需 10 张）：取该体裁一整页候选，补热度后按热度降序，
-  // 让首页 tab 显示的是「本体裁最热的剧」，而不是平台筛选流的随机顺序。
+  // 单页请求（首页首屏只需 10 张）：默认补热度后按热度降序，让首页 tab 显示
+  // 本体裁最热的剧；一旦用户选了官方排序则完全尊重 SDK 的顺序。
   if (size <= 18) {
     const r = await Ohg.shortFilter(q);
-    const finalItems = sortByHeat(await enrichRows(r.items || []));
+    const finalItems = await orderItems(r.items || [], sel);
     const names = { real: '真人剧', comic: 'AI漫剧', ai: 'AI短剧' };
     return { channel: ch, name: names[ch] || ch, page, total_pages: 999,
       has_more: r.has_more === true, items: finalItems.slice(0, size) };
@@ -512,7 +527,7 @@ async function catalog(channel, pageNum, perPage, selections) {
   if (!cursor && page > 1) cursor = catalogCursors.get(ch + ':' + selKey + ':' + (page - 1));
   if (cursor) q.cursor = cursor;
   const r = await Ohg.shortFilter(q);
-  const finalItems = sortByHeat(await enrichRows(r.items || [])).slice(0, size);
+  const finalItems = (await orderItems(r.items || [], sel)).slice(0, size);
   if (r.cursor) catalogCursors.set(ck, r.cursor);
   const names = { real: '真人剧', comic: 'AI漫剧', ai: 'AI短剧' };
   return { channel: ch, name: names[ch] || ch, page, total_pages: 999,

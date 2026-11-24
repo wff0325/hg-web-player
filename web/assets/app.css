@@ -196,19 +196,21 @@ body.hero-bg-view .version-tag { color: rgba(255,255,255,.85); background: rgba(
   position: relative; width: 100%; margin: 0 0 2px;
   height: 272px; overflow: visible;
 }
-/* 分类页只有背景图、无文案/按钮/指示点：占位压到最低，题材 chips 紧跟 tab */
-body.hero-bg-only .hero-banner { height: 60px; }
+/* 分类页只有背景图、无文案/按钮/指示点：不再用占位块把筛选面板顶下去，
+   筛选第一行直接贴着顶部 tab；背景是 fixed 层，压缩占位不影响背景显示。 */
+body.hero-bg-only .hero-banner { height: 6px; margin-bottom: 0; }
+body.hero-bg-only .topic-bar { padding-top: 2px; }
+body.hero-bg-only .filter-label { color: var(--text); text-shadow: var(--on-poster-shadow); }
 body.hero-bg-only .hero-copy,
 body.hero-bg-only .hero-dots { display: none !important; }
-/* 背景渐隐在 chips 下方（约 220px）结束，中间是背景图而非白底空白 */
+/* 筛选面板贴着 tab 后，背景必须在 tab 下方就渐隐完，否则文字压在海报上看不清。
+   430px 高的 fixed 背景层在约 120px（28%）处收干净，下方是干净的页面底色。 */
 body.hero-bg-only .hero-slide img,
 body.hero-bg-only .hero-scrim {
   -webkit-mask-image: linear-gradient(to bottom,
-    #000 0%, rgba(0,0,0,.92) 26%, rgba(0,0,0,.55) 40%,
-    rgba(0,0,0,.18) 48%, transparent 52%);
+    #000 0%, rgba(0,0,0,.78) 12%, rgba(0,0,0,.32) 20%, transparent 28%);
   mask-image: linear-gradient(to bottom,
-    #000 0%, rgba(0,0,0,.92) 26%, rgba(0,0,0,.55) 40%,
-    rgba(0,0,0,.18) 48%, transparent 52%);
+    #000 0%, rgba(0,0,0,.78) 12%, rgba(0,0,0,.32) 20%, transparent 28%);
 }
 /* 背景层铺满整列(含顶栏背后)固定在底层，不随内容滚动——照搬 hongguo-desktop 的 .hero-layer */
 .home-hero-bg {
