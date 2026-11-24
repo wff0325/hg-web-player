@@ -1,4 +1,4 @@
 {
-  "version": "v1.12.1",
-  "note": "修复查全季接口：改用官方「系列剧」场景 from=single_col_same_ip_series 并补 scene/session_uuid/filter_ids，解析改为按 show_type=547 接受「系列剧」cell。不再把「同IP泛相关」(3D版/罪名不朽) 误当同系列各季。"
+  "version": "v1.12.2",
+  "note": "修复详情页全季不显示：同系列判定改用 openhongguo 的双向前缀匹配(sameSeasonBase)，容忍标题主干结尾「的/之」差异（如「…文盲修仙」vs「…文盲修仙的」）；保留 seasonStyle 命名风格过滤防「二季/第三季」误判。"
 }

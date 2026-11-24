@@ -1208,10 +1208,29 @@
    * @returns {Promise<{next: object|null, current: object|null}>}
    */
   /** 去掉季号 + 标点空白后的「标题主干」，用于判定是否同一系列。 */
+  /**
+   * 去掉标题末尾的季标记（“…第二季”、“…3”），留主干。
+   * 对齐 beilunyang/openhongguo 的 seasonBaseTitle：只剥季号 + 去标点空白，
+   * 不做任何「去尾的/之」的硬编码——结尾差异交给 sameSeasonBase 的前缀匹配处理。
+   */
   function seasonStem(title) {
     return String(title || '').trim()
       .replace(/第?\s*[0-9零〇一二两三四五六七八九十百]+\s*季\s*$/, '')
       .replace(/[\p{P}\p{Z}\s]/gu, '');
+  }
+
+  /**
+   * 判定两个标题是否同一系列。移植自 openhongguo sdk/series.go:
+   *   candBase := seasonBaseTitle(item.Title)
+   *   if candBase != base && !HasPrefix(candBase, base) && !HasPrefix(base, candBase) { continue }
+   * 即归一化主干后做双向前缀匹配，容忍「…修仙」/「…修仙的」这类结尾差异，
+   * 避免用严格相等时差一个「的」就把整部剧的全季全过滤掉。
+   */
+  function sameSeasonBase(titleA, titleB) {
+    const a = seasonStem(titleA);
+    const b = seasonStem(titleB);
+    if (a === '' || b === '') return false;
+    return a === b || a.startsWith(b) || b.startsWith(a);
   }
 
   /**
@@ -1308,8 +1327,7 @@
    *  - 唯一候选才认（多个同 stem 候选说明数据不可靠，宁可不给也不给错）
    */
   function pickNextFromOfficial(items, cur, sid, curTitle) {
-    const curStem = seasonStem(cur.base || '');
-    if (curStem === '') return null;
+    if (seasonStem(cur.base || '') === '') return null;
     const want = cur.num + 1;
     // 当前剧季号写法（第X季 / X季）。标题里没有季号时为 null，不做限制。
     const curStyle = seasonStyle(curTitle || '');
@@ -1321,7 +1339,7 @@
       const fromTitle = parseSeason(it.title);
       const index = idx > 0 ? idx : (fromTitle ? fromTitle.num : 0);
       if (index !== want) continue;
-      if (seasonStem(it.title) !== curStem) continue;
+      if (!sameSeasonBase(it.title, cur.base)) continue;
       // 写法必须一致：「…考试二季」的续集应是「…考试三季」，不是「…考试第三季」
       if (curStyle !== null && seasonStyle(it.title) !== curStyle) continue;
       cands.push({
@@ -1347,8 +1365,7 @@
     const meta = detail.meta || {};
     const cur = currentSeason(meta);
     if (cur === null) return;
-    const curStem = seasonStem(cur.base || '');
-    if (curStem === '') return;
+    if (seasonStem(cur.base || '') === '') return;
 
     let items = [];
     try {
@@ -1368,7 +1385,7 @@
     seenIds.add(String(sid));
     for (const it of items) {
       if (!it || seenIds.has(String(it.series_id))) continue;
-      if (seasonStem(it.title) !== curStem) continue;   // 只要真正的同系列
+      if (!sameSeasonBase(it.title, cur.base)) continue;   // 只要真正的同系列（双向前缀匹配）
       // 命名风格不同的是别的剧（二季 / 第二季 / 第2季 各自独立），不混进本列表
       if (curStyle !== null && seasonStyle(it.title) !== curStyle) continue;
       seenIds.add(String(it.series_id));
@@ -1472,13 +1489,12 @@
         try {
           const r = await api('/search', { q: cur.base, limit: 30 });
           let bestNum = Infinity;
-          const curStem = seasonStem(cur.base || '');
           for (const it of r.results || []) {
             const d = normalize(it);
             if (!d.id || d.id === sid) continue;
             const s = parseSeason(d.title);
             if (s === null || s.num <= cur.num || s.num >= bestNum) continue;
-            if (seasonStem(d.title) !== curStem) continue;
+            if (!sameSeasonBase(d.title, cur.base)) continue;
             bestNum = s.num;
             next = d;
           }
@@ -1665,13 +1681,12 @@
         try {
           const res = await api('/search', { q: r.base, limit: 30 });
           let best = Infinity;
-          const curStem = seasonStem(r.base || '');
           for (const it of res.results || []) {
             const d = normalize(it);
             if (!d.id) continue;
             const s = parseSeason(d.title);
             if (s === null || s.num <= curNum || s.num >= best) continue;
-            if (seasonStem(d.title) !== curStem) continue;
+            if (!sameSeasonBase(d.title, r.base)) continue;
             best = s.num;
             found = { seriesId: d.id, title: d.title, num: s.num, cover: d.cover, reserved: r };
           }
