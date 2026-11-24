@@ -969,8 +969,9 @@ class Server {
     }
 
     if (method === 'GET' && pathname === '/cache/keep') {
-      // 滚动窗口：只保留 vid=a,b,c 这几集的缓存，窗口外的最近没写过的成品会被删。
-      // 前端换集时给出「本集 + 后两集」，避免缓存无限增长（旧实现上限 60 个文件）。
+      // 2026-11-24 起：不再删窗口外文件（多设备会互相删对方的缓存）。
+      // 这里只把 vid=a,b,c 这几集（前端给的「本集 + 后两集」）的 mtime 刷新为刚观看，
+      // 让它们在 LRU 里排前面；真正删除由 pruneCache 在超过 max_files(默认20) 时按观看时间淘汰。
       const raw = q.vids !== undefined && q.vids !== null ? String(q.vids) : '';
       const vids = raw.split(',').map((s) => s.trim()).filter((s) => /^\d{1,32}$/.test(s));
       if (vids.length === 0) {

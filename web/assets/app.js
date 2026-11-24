@@ -1343,17 +1343,22 @@
     fetch(`${API}/prewarm?${qs.toString()}`).catch(() => {});
   }
 
-  /** 从 fromIndex（1 起）开始的连续三集 vid：本集 + 后两集。 */
+  /**
+   * 看一集就往后预下载 5 集（不含当前集，当前集由正常播放流程下载）。
+   * 窗口 = 本集 + 后 5 集 = 6 个 vid；其中 slice(1) 的 5 集是预热目标。
+   * 缓存淘汰改由后端 LRU（上限 20 个、按观看时间）负责，多设备各看各的不会互相删。
+   */
+  const PREWARM_AHEAD = 5;
   function cacheWindow(fromIndex) {
     const out = [];
-    for (let i = fromIndex; i < fromIndex + 3 && i <= detail.episodes.length; i++) {
+    for (let i = fromIndex; i < fromIndex + PREWARM_AHEAD + 1 && i <= detail.episodes.length; i++) {
       const ep = detail.episodes[i - 1];
       if (ep && ep.vid) out.push(String(ep.vid));
     }
     return out;
   }
 
-  /** 通知后端按窗口滚动缓存：窗口外、且不是刚落盘的旧缓存会被顶替掉。 */
+  /** 通知后端「这几集是最近在看的」：只刷新 mtime 供 LRU 排序，不删任何缓存。 */
   function keepCacheWindow(vids) {
     if (!vids || vids.length === 0) return;
     const qs = new URLSearchParams({ vids: vids.join(','), api_key: KEY });
@@ -1391,25 +1396,26 @@
     loadSource(ep.vid, play.quality, resume, true);
     loadDanmaku(ep.vid);      // 弹幕与片源并行拉，互不阻塞
 
-    // 预热「后两集」+ 弹幕预取 + 缓存窗口滚动：当前集一开始加载就排队，
+    // 看一集就往后预热 5 集 + 弹幕预取 + 标记活跃：当前集一开始加载就排队，
     // 不再依赖 playing 事件（禁自动播放 / 用户暂停时 playing 不来，预热就永远不发）。
     // 后端取址队列区分优先级：预热是 low，排在用户点播（high）后面，
-    // 提前排队不会抢当前集的取址位，但用户点下一集时缓存多半已就绪。
-    // 缓存只留「本集 + 后两集」三集，再往前的一律顶替掉（磁盘不无限涨）。
+    // 提前排队不会抢当前集的取址位，用户连点下一集时缓存多半已就绪。
+    // 缓存不再按窗口删文件——后端统一 LRU（上限 20 个、按观看时间淘汰），
+    // 多设备共用一个后端时各看各的，谁也不会把对方正在看的缓存删掉。
     // 注意：这里绝不能用 loadToken 做竞态守卫——loadSource 里的重试/降清晰度
     // 都会 ++loadToken（见 loadSource 首行），首播慢时 3 秒内几乎必然重试，
-    // 结果整个「预热 + 滚动删除」被跳过，表现就是「后两集没缓存、旧缓存不删」。
+    // 结果整个「预热 + 活跃标记」被跳过，表现就是「后面几集没缓存」。
     // 改用只在换集时才递增的 windowSeq：同一集内的源重试不影响窗口任务。
     const myWindow = ++windowSeq;
     const windowIds = cacheWindow(play.index);
     if (windowIds.length > 1) {
-      // 立即淘汰窗口外的旧缓存，不依赖 3 秒定时器能否跑起来（避免再次漏删）。
+      // 立即把窗口标记成活跃（刷新 mtime），不依赖 3 秒定时器能否跑起来。
       keepCacheWindow(windowIds);
       setTimeout(() => {
         if (myWindow !== windowSeq || player.hidden) return;
-        for (const vid of windowIds.slice(1)) prewarm(vid, play.quality);
-        prefetchDanmaku(windowIds.slice(1));   // 后两集弹幕先拉到内存，换集零等待
-        keepCacheWindow(windowIds);            // 预热排队后再兜底一次
+        for (const vid of windowIds.slice(1)) prewarm(vid, play.quality);  // 后 5 集
+        prefetchDanmaku(windowIds.slice(1));   // 后 5 集弹幕先拉到内存，换集零等待
+        keepCacheWindow(windowIds);            // 预热排队后再标记一次活跃
       }, 3000);
     }
 
@@ -2562,8 +2568,8 @@
     })(),
     items: [], idx: 0, last: 0, lanes: [], token: 0,
     raf: 0, notice: '',
-    // 内存弹幕缓存：预取后两集，换集时命中直接用，不必等接口回来。
-    // 只留最近 8 集（本集 + 后两集 + 几集回看），防止长时间追剧内存上涨。
+    // 内存弹幕缓存：预取后 5 集，换集时命中直接用，不必等接口回来。
+    // 只留最近 8 集（本集 + 后 5 集 + 几集回看），防止长时间追剧内存上涨。
     cache: new Map(), awaitMeta: false, awaitMetaAt: 0
   };
   const DM_CACHE_MAX = 8;
@@ -2709,7 +2715,7 @@
     while (dm.cache.size > DM_CACHE_MAX) dm.cache.delete(dm.cache.keys().next().value);
   }
 
-  /** 预取后两集弹幕：只写内存缓存，不碰当前正在显示的 dm.items，保证当前集连贯。 */
+  /** 预取后 5 集弹幕：只写内存缓存，不碰当前正在显示的 dm.items，保证当前集连贯。 */
   async function prefetchDanmaku(vids) {
     if (!dm.on || !detail.seriesId) return;
     for (const vid of vids || []) {

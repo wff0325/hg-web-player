@@ -29,7 +29,29 @@ const AppSource = require('../service/app-source');
 const Ohg = require('../service/ohg');
 
 /** 默认保留的缓存文件数上限。 */
-const CACHE_MAX_FILES = 30;
+const CACHE_MAX_FILES = 20;
+
+/**
+ * 刷新缓存文件的「观看时间」（mtime），供 LRU 淘汰使用。
+ *
+ * 2026-11-24 缓存策略改为「全局 20 个 + 按观看时间 LRU」：
+ * 多设备共用同一后端时，早先的「本集+后两集窗口」删除会让 A 设备把 B 设备
+ * 正在看的剧删掉。现在删除只看 LRU：命中（即真的拿去播放）就 touch 一下，
+ * 最久没看的先被 pruneCache 淘汰。窗口接口 /cache/keep 不再删窗口外文件。
+ *
+ * 只 touch 成品（play > out > raw），跳过临时文件；失败静默，不影响播放。
+ */
+function touchWatched(vid, quality) {
+  try {
+    const f = cachedPath(vid, quality);
+    if (f !== null) {
+      const now = new Date();
+      fs.utimesSync(f, now, now);
+    }
+  } catch (e) {
+    // 观看时间刷新失败无所谓，LRU 最坏退回按下载时间
+  }
+}
 
 /** 缓存根目录：
  *  1) 环境变量 HONGGUO_STREAM_CACHE 直接指定缓存目录（自检/临时覆盖用）；
@@ -623,7 +645,9 @@ function errMsg(e) {
  * 调用方直接执行（对齐 Java 的 CallerRunsPolicy）。
  */
 // 实测上游对「短时间内连续取 Key」很敏感：并发 4 会让多条预热连续取址，
-// 反而抬高「App 接口未返回 data」的概率。前端一次只预热下一集，2 足够。
+// 反而抬高「App 接口未返回 data」的概率。前端现在一次预热后 5 集，仍保持并发 2：
+// 5 集分 3 批、约 10 秒内下完，正常看一集的时间远超这个；调高只会招风控。
+// 需要更快可用 HG_PREWARM_MAX_CONCURRENCY 覆盖（不建议超过 3）。
 const PREWARM_MAX_CONCURRENCY = Log.envInt('HG_PREWARM_MAX_CONCURRENCY', 2);
 const PREWARM_QUEUE_MAX = 64;
 let prewarmActive = 0;
@@ -716,6 +740,9 @@ async function ensureDecrypted(vid, quality, priority, source) {
     if (Log.env('HG_STREAM_DEBUG', null) !== null) {
       Log.info('缓存命中 vid=' + vid + ' q=' + quality + ' ' + path.basename(hit));
     }
+    // 命中即「正在观看」，刷新 mtime 作为 LRU 观看时间：
+    // 多设备共用后端时，最近看过的排前面，最久没看的才会被 pruneCache 淘汰。
+    touchWatched(vid, quality);
     // 只有残留的 raw（缺 play 成品）才需要补一次减壳/remux
     if (hit !== p.raw) return hit;
     const r = await toPlayable(p.raw);
@@ -985,53 +1012,47 @@ function deleteCached(vids, all) {
 }
 
 /**
- * 只保留指定 vid 的缓存（滚动窗口：本集 + 后两集）。
+ * 标记「本集 + 后两集」为最近活跃（LRU 置顶），不删除任何文件。
  *
- * 与 pruneCache 的区别：pruneCache 按「文件数上限 + 修改时间」淘汰，不知道哪一集
- * 正在播；keepWindow 按「分集 id 白名单」淘汰，窗口由前端在换集时给出。
- * 窗口外的成品文件一律删掉，窗口内的一动不动——所以"最多缓存三集、多了顶替"
- * 由这里保证，而不是靠调大/调小 max_files。
+ * 2026-11-24 缓存策略改为「全局 20 个 + 按观看时间 LRU」后，这里不再删窗口外
+ * 文件——多设备共用同一后端时，旧行为会让 A 设备的窗口把 B 设备正在看的剧删掉
+ * （典型 bug：手机看着看着，电视端那集缓存没了）。删除统一交给 pruneCache：
+ * 超过 20 个时按 mtime（= 最近观看/落盘时间）淘汰最旧的。
  *
- * 保护两类文件：
- * - *.part / *.enc：下载或解密仍在进行，删了会毁掉当前任务；
- * - 最近 RECENT_MS 内写过的成品：可能是刚落盘、浏览器还没读完的集，晚点再收。
+ * 前端换集给的 vids（本集+后两集）在这里只用来 touch mtime——表示这几集是
+ * "最近要看的"，让它们排在 LRU 前面，不那么早被淘汰。窗口外的文件保持原样，
+ * 只有在总量超过 20 且它们最久没被看时才会被 pruneCache 收走。
  *
- * @param {string[]} vids 要保留的分集 id
- * @param {number} [recentMs] 近期写入保护窗口（毫秒），0 表示不保护
+ * 返回结构保留兼容（deleted/freed 恒 0、kept 计入命中数），前端不读也能工作。
+ *
+ * @param {string[]} vids 前端给出的活跃分集 id
  * @returns {{deleted:number, freed:number, failed:string[], kept:number}}
  */
-function keepWindow(vids, recentMs) {
+function keepWindow(vids) {
   const want = new Set((vids || []).map((v) => String(v).trim()).filter((v) => v !== ''));
   const result = { deleted: 0, freed: 0, failed: [], kept: 0 };
   if (want.size === 0) return result;
-  const recent = recentMs === undefined ? 20000 : Math.max(0, Number(recentMs) || 0);
-  const now = Date.now();
 
   const dir = cacheDir();
   let isDir = false;
   try { isDir = fs.statSync(dir).isDirectory(); } catch (e) { isDir = false; }
   if (!isDir) return result;
 
+  const now = new Date();
   for (const n of fs.readdirSync(dir)) {
     if (!n.endsWith('.mp4')) continue;
     if (n.endsWith('.part') || n.endsWith('.enc')) continue;
     const us = n.indexOf('_');
     const vid = us > 0 ? n.substring(0, us) : '';
+    if (!want.has(vid)) continue;
     let st;
     try { st = fs.statSync(path.join(dir, n)); } catch (e) { continue; }
     if (!st.isFile()) continue;
-    if (want.has(vid)) { result.kept++; continue; }
-    if (recent > 0 && now - st.mtimeMs < recent) { result.kept++; continue; }
     try {
-      fs.unlinkSync(path.join(dir, n));
-      result.deleted++;
-      result.freed += st.size;
-      if (Log.env('HG_KEEP_DEBUG', null) !== null) {
-        Log.info('窗口清理删除 ' + n + '（保留 ' + Array.from(want).join(',') + '）');
-      }
+      fs.utimesSync(path.join(dir, n), now, now);
+      result.kept++;
     } catch (e) {
       result.failed.push(n);
-      Log.warn('窗口清理删除失败 ' + n + '：' + errMsg(e));
     }
   }
   return result;
