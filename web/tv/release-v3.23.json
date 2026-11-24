@@ -1,0 +1,8 @@
+{
+  "tag": "v3.23",
+  "code": 51,
+  "name": "电视版 3.23",
+  "notes": "1. 在线更新改为按版本号探测 raw 发布文件，彻底绕开 CDN 缓存与 GitHub ECDSA 证书问题。\n2. 修复首页短剧/漫剧/AI剧分页重复、提前「没有更多了」。\n3. 封面直连图床提速。\n4. 全季/预约按钮可用遥控器选中。",
+  "apk": "https://raw.githubusercontent.com/wff0325/hg-web-player/main/apk/minireel-tv-3.23.apk",
+  "size": 2102954
+}
