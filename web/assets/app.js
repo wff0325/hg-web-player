@@ -466,6 +466,9 @@
     home.started = true;
     home.view = view; home.page = 0; home.loading = false; home.done = false; home.items = [];
     home.topic = ''; home.selections = {};
+    // 榜单翻页游标必须清零：否则切走再点回热播榜会从上次的位置续取，
+    // 表现为「每次点击热播榜都换一批剧」。content/board 是用户选择，保留不动。
+    rankUI.cursor = '';
     grid.innerHTML = ''; status.textContent = '';
     clearHomeExtras();
     if (view === 'mine') return renderMine();

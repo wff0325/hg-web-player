@@ -520,15 +520,17 @@ async function catalog(channel, pageNum, perPage, selections) {
   }
 
   // 多页请求（分类页滚动）：用缓存的游标续取，一次 SDK 调用拿一页。
-  // 游标 key 必须带上筛选条件，否则切换筛选后会串到上一组条件的下一页。
+  // ⚠️ 关键：shortFilter 返回的 cursor 指向「下一页」，必须存到 page+1 的 key。
+  // 旧代码存回当前 page，导致下次重新点进分类（page=1）读到第 2 页的游标，
+  // 每点一次就往后跳一页——这正是「每次点击都刷新出不一样的剧」的根因。
   const selKey = JSON.stringify(sel);
-  const ck = ch + ':' + selKey + ':' + page;
-  let cursor = catalogCursors.get(ck);
-  if (!cursor && page > 1) cursor = catalogCursors.get(ch + ':' + selKey + ':' + (page - 1));
+  const keyPrefix = ch + ':' + selKey + ':';
+  const cursor = catalogCursors.get(keyPrefix + page);
   if (cursor) q.cursor = cursor;
   const r = await Ohg.shortFilter(q);
   const finalItems = (await orderItems(r.items || [], sel)).slice(0, size);
-  if (r.cursor) catalogCursors.set(ck, r.cursor);
+  // 只缓存"下一页"入口；page=1 永远没有预置游标，重新进入必从第一页开始。
+  if (r.cursor) catalogCursors.set(keyPrefix + (page + 1), r.cursor);
   const names = { real: '真人剧', comic: 'AI漫剧', ai: 'AI短剧' };
   return { channel: ch, name: names[ch] || ch, page, total_pages: 999,
     has_more: r.has_more === true, items: finalItems };
