@@ -17,8 +17,11 @@ const MAGIC16 = Crypto.unhex('2d4b4fca49750d433fb5ae2c226dcc56');
 const LICENSE = '646637794';
 
 /**
- * medusa wire 字段 21。2026-11-24 currentApp 7.4.5.32 抓包为 312；
- * 旧值 377 会让 preload/v1 返回 HTTP 200 + 0 字节。
+ * medusa wire 字段 21。
+ *
+ * 2026-11-24 对照 N3urda/hongguoTV main（V5Constants.kt）：
+ * 7.4.5.32 preload/v1 成功样本用 312；A/B 里 377 返回 200/0B。
+ * 312 必须与同一套简化 medusa 环境块配套使用。
  */
 const FIELD21 = 312;
 

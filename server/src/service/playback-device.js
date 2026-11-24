@@ -31,11 +31,66 @@ const KDF_SALT = Buffer.from(
   '4dd4c2e6b83162090e52b3c7a6733ba41cb2462b829ab58a196b39db57177524'
   + 'f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58', 'hex');
 
-let cached = null;          // { device_id, iid, cdid }
+/**
+ * 已验证基准播放设备（verified baseline）。
+ *
+ * 2026-11-24：上游对「新注册的匿名设备」整体行为风控，一律回 HTTP 200 + 0 字节
+ * （本机对 4 条端点 × 312/377 × 番茄短剧通道逐一实测均空）。而一台服务端已放行、
+ * 经参考项目 legend0/hongguo-desktop 内置的基准设备实测可正常取址：
+ * v5 preload/v1 + field21=312 + 该身份直接返回约 23KB 的完整 video_model。
+ * Cookie 非必需（有无都成功），关键在 device_id/iid/cdid 三要素本身。
+ *
+ * 因此把它作为默认/保底身份：本地无有效持久化身份、或播放空响应需要换身份时，
+ * 一律用它，避免反复注册随机设备（既取不到流，又烧注册配额、加重风控）。
+ * 来源为公开项目内置常量，非任何用户账号凭据。设 HG_PLAYBASELINE_OFF=1 可关闭。
+ */
+const DEFAULT_VERIFIED_DEVICE = Object.freeze({
+  device_id: '1624456208323876',
+  iid: '1624456208327972',
+  cdid: '91d56f7e-c027-4ce9-9a3c-229d59a13c3b',
+  cookie: 'install_id=1624456208327972; store-region=cn-bj; store-region-src=did',
+});
+
+function baselineEnabled() {
+  return Log.env('HG_PLAYBASELINE_OFF', null) === null;
+}
+
+/** 由基准常量构造一个与落盘身份同形状的不可变对象。 */
+function baselineId() {
+  const b = DEFAULT_VERIFIED_DEVICE;
+  return Object.freeze({
+    device_id: b.device_id, iid: b.iid, cdid: b.cdid,
+    ttreq: '', store_region: 'cn-bj', store_region_src: 'did',
+    cookie: b.cookie, baseline: true,
+  });
+}
+
+let cached = null;          // { device_id, iid, cdid, ttreq, store_region, store_region_src }
 let inflight = null;        // Promise
 let retryAfter = 0;         // 注册失败冷却截止时间
 let rotateAfter = 0;        // 换身份冷却截止时间（默认 30 秒）
 const ROTATE_COOLDOWN_MS = 30 * 1000;
+
+/** 从 Set-Cookie 中取一个字段；注册响应可能给多个 Set-Cookie 头。 */
+function cookieOf(headers, name) {
+  const raw = headers === null || headers === undefined ? null : headers['set-cookie'];
+  if (raw === null || raw === undefined) return '';
+  const lines = Array.isArray(raw) ? raw : [raw];
+  const re = new RegExp('(?:^|;\\s*)' + name + '=([^;]+)', 'i');
+  for (const line of lines) {
+    const m = re.exec(String(line));
+    if (m !== null) return decodeURIComponent(m[1]);
+  }
+  return '';
+}
+
+/** 上游 anonymousHeaders 使用的访客 Cookie 串。 */
+function guestCookieOf(id) {
+  if (id === null || !id.ttreq) return '';
+  return 'passport_csrf_token=; passport_csrf_token_default=; store-region='
+    + (id.store_region || '') + '; store-region-src=' + (id.store_region_src || '')
+    + '; install_id=' + id.iid + '; ttreq=' + id.ttreq;
+}
 
 /** 身份落盘路径：与设备身份池同目录（server/config），不随缓存目录迁移。 */
 function storePath() {
@@ -47,13 +102,20 @@ function loadCached() {
   if (cached !== null) return cached;
   try {
     const p = storePath();
-    if (!fs.existsSync(p)) return null;
+    if (!fs.existsSync(p)) return baselineEnabled() ? baselineId() : null;
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     const device_id = responseId(j, 'device_id');
     const iid = responseId(j, 'iid');
     const cdid = typeof j.cdid === 'string' && j.cdid !== '' ? j.cdid : '';
-    if (!device_id || !iid || !cdid) return null;
-    cached = Object.freeze({ device_id, iid, cdid });
+    if (!device_id || !iid || !cdid) return baselineEnabled() ? baselineId() : null;
+    const id = {
+      device_id, iid, cdid,
+      ttreq: typeof j.ttreq === 'string' ? j.ttreq : '',
+      store_region: typeof j.store_region === 'string' ? j.store_region : '',
+      store_region_src: typeof j.store_region_src === 'string' ? j.store_region_src : '',
+    };
+    id.cookie = guestCookieOf(id);
+    cached = Object.freeze(id);
     return cached;
   } catch (e) {
     return null;
@@ -141,11 +203,23 @@ async function registerOnce() {
   if (code !== 0) throw new Error('设备注册被拒绝（' + code + '）');
   const device_id = responseId(j, 'device_id');
   const iid = responseId(j, 'install_id');
-  if (!device_id || !iid) throw new Error('设备注册未返回有效身份');
-  Log.info('匿名播放设备注册成功 device_id=' + device_id + ' install_id=' + iid);
-  const id = Object.freeze({ device_id, iid, cdid });
-  saveCached(id);
-  return id;
+  if (!device_id || !iid) {
+    throw new Error('设备注册未返回有效身份（HTTP ' + res.status + '，响应: '
+      + txt.slice(0, 300) + '）');
+  }
+  const ttreq = cookieOf(res.headers, 'ttreq');
+  const store_region = cookieOf(res.headers, 'store-region');
+  const store_region_src = cookieOf(res.headers, 'store-region-src');
+  Log.info('匿名播放设备注册成功 device_id=' + device_id + ' install_id=' + iid
+    + ' guest_cookie=' + (ttreq !== '' ? 'yes' : 'no'));
+  const id = {
+    device_id, iid, cdid,
+    ttreq, store_region, store_region_src,
+  };
+  id.cookie = guestCookieOf(id);
+  const frozen = Object.freeze(id);
+  saveCached(frozen);
+  return frozen;
 }
 
 /**
@@ -153,6 +227,14 @@ async function registerOnce() {
  * @param {boolean} [renew] 传 true 表示上一个身份被上游拒绝，强制换新。
  */
 async function getPlaybackDevice(renew) {
+  // 基准设备模式（默认）：新注册设备已被上游整体风控（200/0B），
+  // 无论初次取址还是空响应换身份，都直接用已验证基准设备，不再烧注册配额。
+  if (baselineEnabled()) {
+    const base = baselineId();
+    cached = base;                 // 保持进程内 identity 视图一致
+    return base;
+  }
+
   if (cached === null) loadCached();          // 重启后先复用磁盘身份
   // renew（换身份）：必须过冷却期，避免每次空响应都注册一台新设备。
   // 冷却期内直接返回旧身份（上游空响应多半不是身份问题，换也没用）。
@@ -181,4 +263,4 @@ async function getPlaybackDevice(renew) {
   return inflight;
 }
 
-module.exports = { getPlaybackDevice, registerOnce, REGISTER_URL, KDF_SALT };
+module.exports = { getPlaybackDevice, registerOnce, REGISTER_URL, KDF_SALT, DEFAULT_VERIFIED_DEVICE };

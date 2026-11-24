@@ -162,6 +162,12 @@ function bodyMd5Of(body) {
   return md5(body);
 }
 
+/** 当前 v5 medusa（openhongguo）对无 body 用 16 个零字节，不是 md5(空)。 */
+function bodyMd5V5(body) {
+  if (body === null || body === undefined || body.length === 0) return Buffer.alloc(16);
+  return md5(body);
+}
+
 function sm3(data) {
   return crypto.createHash('sm3').update(data).digest();
 }
@@ -932,8 +938,11 @@ function buildMedusa(url, body, khronos, deviceId, version) {
  * @param {object} identity 注册身份 + 版本参数（device_id / version_name / os_version / device_type / channel）
  * @returns {string} base64 的 x-medusa
  */
-function buildMedusaV5(url, body, khronos, identity) {
+function buildMedusaV5(url, body, khronos, identity, field21) {
   const who = identity || {};
+  // 2026-11-20 上游双端点分化：video_model/v1 旧端点配套 field21=377，
+  // multi_video_model/* 新端点配套 field21=312。缺省 312 保持既有链路不变。
+  const field21Value = (field21 === undefined || field21 === null) ? V5.FIELD21 : field21;
   const query = sm3(Buffer.from(queryOf(url), 'utf8'));
   const bodyMd5 = bodyMd5Of(body);
   const f13 = hashF13V5(query, bodyMd5, le32(khronos | 0), khronos);
@@ -941,9 +950,18 @@ function buildMedusaV5(url, body, khronos, identity) {
   const version = String(who.version_name || '');
   const deviceType = String(who.device_type || '25053RT47C');
 
+  // 2026-11-24 校正：buildMedusaV5 对应 N3urda/hongguoTV 的 Signer.medusaV5()
+  // （field21=312、message field15=1/1/1/1、env=[6,8,12,14] 均为 v5 形态），
+  // 其 deviceInfo 是精简 14 字段版：1/2/3/4/5/6/12/13/22/25/30/31/32/34。
+  // 之前误把 medusa()（老链路 7.4.3.32）里 deviceProto() 的完整 30+ 字段
+  // （7/8/9/10/11/14/16-21/23/24/26-29/33/35/36/38）混进来，字段集合对不上，
+  // 服务端按「签名设备画像与 query 不一致」判空，回 HTTP 200 + 0 字节。
+  // 注意 field22 用注册身份的 os_version，field25 用进程启动时间，
+  // field31/34 固定 HONOR，field30/32 用 device_type —— 与上游逐字一致。
   const deviceInfo = proto([
     [1, 1, 'sint'], [2, 2, 'sint'], [3, '8662'], [4, String(who.device_id || '0')],
-    [5, PROCESS_NONCE], [6, '!noperm!'], [12, 'Asia/Shanghai,8'], [13, 'zh_CN'],
+    [5, PROCESS_NONCE], [6, '!noperm!'],
+    [12, 'Asia/Shanghai,8'], [13, 'zh_CN'],
     [22, String(who.os_version || '16')], [25, PROCESS_STARTED, 'sint'],
     [30, deviceType], [31, 'HONOR'], [32, deviceType], [34, 'HONOR']]);
   const env = proto([
@@ -956,7 +974,7 @@ function buildMedusaV5(url, body, khronos, identity) {
     [10, flags, 'bytes'], [12, khronos, 'sint'], [13, f13, 'bytes'],
     [14, sliceBytes(query, 0, 6), 'bytes'],
     [15, proto([[1, 1, 'sint'], [2, 1, 'sint'], [3, 1, 'sint'], [5, 1, 'sint']]), 'message'],
-    [17, khronos, 'sint'], [20, 'none'], [21, V5.FIELD21, 'sint'], [23, env, 'message'],
+    [17, khronos, 'sint'], [20, 'none'], [21, field21Value, 'sint'], [23, env, 'message'],
     [24, '{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,'
     + '"kd":0,"dyn":"","do":1,"tk":true}']]);
 
@@ -1130,7 +1148,7 @@ const V5_HEADER_ALLOW = new Set(['x-khronos', 'x-helios', 'x-medusa']);
  * @param {number} [now] 毫秒时间戳；缺省取当前时间
  * @returns {{url:string, headers:object}}
  */
-function signPlaybackV5(base, values, body, now) {
+function signPlaybackV5(base, values, body, now, field21) {
   const baseMs = (now === undefined || now === null) ? Date.now() : now;
   const ts = Math.floor(baseMs / 1000);
   for (let offset = 0; offset <= 1023; offset++) {
@@ -1148,7 +1166,7 @@ function signPlaybackV5(base, values, body, now) {
       'x-argus': b64(le32(ts | 0)),
       'x-gorgon': xGorgon(query, body, ts, rndInt(65536)),
       'x-helios': heliosWith(ts, rndInt32(), V5.LICENSE),
-      'x-medusa': buildMedusaV5(url, body, ts, values),
+      'x-medusa': buildMedusaV5(url, body, ts, values, field21),
     };
     for (const k of Object.keys(headers)) {
       if (!V5_HEADER_ALLOW.has(k)) delete headers[k];
@@ -1162,13 +1180,424 @@ function signPlaybackV5(base, values, body, now) {
   throw new Error('无法生成 v5 播放签名（1024 个 ticket 内未命中分支）');
 }
 
+// ==================== 当前 openhongguo 主链路（player/v1 真机 medusa） ====================
+//
+// 2026-11-24：beilunyang/openhongguo v0.4.1 把播放签名切换到真机形态：
+//  - 真机 medusa 状态字段 21 = 369，模拟器 377 会被服务端回 HTTP 200 + 0 字节；
+//  - env 里补上 PID/PPID/时钟/存储/安装时间，message field 15 用真机计数器；
+//  - message field 24 的 JSON 也要带 sts/lp/fl。
+// 下面这一组函数只服务 player/v1 主链路；旧的 preload/v1 与 video_tab
+// 签名保持原样，作为兜底，避免一次性把可用退路全换掉。
+
+const MEDUSA_DEVICE_FLAGS = Buffer.from([0x04, 0x05, 0, 0, 0, 0, 0, 0]);
+const MEDUSA_EMULATOR_FLAGS = Buffer.from([0x08, 0, 0, 0, 0, 0, 0, 0]);
+const MEDUSA_INSTALL_ANCHOR = 1795440816000;
+const MEDUSA_ENV_VERSION = 'v04.10.03.04-bugfix';
+const MEDUSA_SDK_VERSION = 'v04.10.03-ml-android';
+const MEDUSA_SDK_CODE = 0x040a0300;
+const MEDUSA_NOTSET = '!notset!';
+const MEDUSA_NOPERM = '!noperm!';
+const MEDUSA_NOPERM_INT = -888888;
+const MEDUSA_UNSET = 694367;
+
+let medusaProcessEnv = null;
+let medusaCounter = 0;
+
+function nextMedusaCount() {
+  if (medusaCounter === 0) {
+    medusaCounter = 20 + (Math.floor(Date.now() * 1000) % 100);
+  }
+  return ++medusaCounter;
+}
+
+function processMedusaEnv() {
+  if (medusaProcessEnv !== null) return medusaProcessEnv;
+  const now = Date.now();
+  medusaProcessEnv = Object.freeze({
+    PID: 3000 + (Math.floor(now * 1000) % 25000),
+    PPID: 500 + (Math.floor(now * 40) % 700),
+    LaunchMillis: now,
+    Clock18: 766353820,
+    Clock19: 16,
+    Clock20: -1072050540,
+    Channel: 'xiaomi_8662_64',
+    UnH: 2398682137,
+    Sts: 27,
+    Fkd: 1963693275,
+    Pd: 1442983616,
+    Lp: '2|520830913092|521433182354|2078052786776|1081701896',
+    Fl: '0|0|2523408538|2586339478|997724116|0|0|0|0|606600138',
+    Status: V5.FIELD21,
+  });
+  return medusaProcessEnv;
+}
+
+/** SDK 的 rand() 是 31 位；上游明确把 medusa 随机量掩到 0x7fffffff。 */
+function rndUint31() {
+  return crypto.randomBytes(4).readUInt32BE(0) & 0x7fffffff;
+}
+
+/** 从 query 里的设备字段推导稳定的“真机环境”，与 openhongguo medusaDeviceOf 对齐。 */
+function medusaDeviceOf(query, deviceId) {
+  const model = paramOf(query, 'device_type', '');
+  if (model === '') return null;
+  const h = crypto.createHash('sha256')
+    .update('medusa-device\0' + deviceId, 'utf8').digest();
+  const pick = (i, n) => (readLe32(h, i * 4) >>> 0) % n;
+  const storages = [106.83, 108.57, 229.36, 233.91, 487.62];
+  const memories = [5.37, 7.42, 11.18, 15.07];
+  const storage = storages[pick(0, storages.length)] + pick(1, 400) / 1000;
+  const memory = memories[pick(2, memories.length)] + pick(3, 90) / 1000;
+  const day = 24 * 60 * 60 * 1000;
+  return {
+    AppVersion: paramOf(query, 'version_name', ''),
+    Model: model,
+    Brand: paramOf(query, 'device_brand', ''),
+    OSVersion: paramOf(query, 'os_version', ''),
+    InstallMillis: MEDUSA_INSTALL_ANCHOR - day - pick(4, 20 * day),
+    StorageGB: storage,
+    StorageFreeGB: storage * (0.25 + pick(5, 500) / 1000),
+    MemoryGB: memory,
+    MemoryFreeGB: 0.35 + pick(6, 900) / 1000,
+  };
+}
+
+function strField(tag, value) {
+  return [tag, value === '' || value === null || value === undefined ? MEDUSA_NOTSET : value, 'string'];
+}
+
+function medusaDeviceBlock(deviceId, env, nowMillis) {
+  const d = env.Device;
+  return proto([
+    [1, 1, 'sint'],
+    [3, '8662', 'string'],
+    [4, deviceId, 'string'],
+    [5, MEDUSA_NOTSET, 'string'],
+    [6, MEDUSA_NOPERM, 'string'],
+    [7, MEDUSA_NOPERM_INT, 'sint'],
+    [8, MEDUSA_NOPERM_INT, 'sint'],
+    [9, 2, 'sint'],
+    [10, MEDUSA_NOPERM_INT, 'sint'],
+    [11, MEDUSA_NOTSET, 'string'],
+    [12, 'Asia/Shanghai,8', 'string'],
+    [13, 'zh_CN', 'string'],
+    [14, 8, 'sint'],
+    [16, d.StorageGB, 'float'],
+    [17, d.StorageFreeGB, 'float'],
+    [18, d.MemoryGB, 'float'],
+    [19, d.MemoryFreeGB, 'float'],
+    [20, d.StorageGB * 2, 'float'],
+    [21, d.StorageFreeGB * 2, 'float'],
+    strField(22, d.OSVersion),
+    [23, 60, 'sint'],
+    [24, 10, 'sint'],
+    [25, d.InstallMillis, 'sint'],
+    [26, env.LaunchMillis + 540, 'sint'],
+    [27, d.InstallMillis, 'sint'],
+    [28, nowMillis, 'sint'],
+    [29, 1, 'sint'],
+    strField(30, d.Model),
+    strField(31, d.Brand),
+    [32, MEDUSA_NOTSET, 'string'],
+    [33, MEDUSA_NOTSET, 'string'],
+    [34, MEDUSA_NOTSET, 'string'],
+    strField(35, d.Brand),
+    [36, MEDUSA_NOTSET, 'string'],
+    [38, 3, 'sint'],
+    [40, env.LaunchMillis, 'sint'],
+  ]);
+}
+
+function medusaV5EnvCurrent(ts, deviceId, env, rnd) {
+  const uptime = Math.max(1, ts - Math.floor(env.LaunchMillis / 1000));
+  return proto([
+    [1, uptime, 'sint'],
+    [6, MEDUSA_ENV_VERSION, 'string'],
+    [7, env.PID, 'sint'],
+    [8, env.Channel, 'string'],
+    [12, medusaDeviceBlock(deviceId, env, ts * 1000 + (rnd.Message % 1000)), 'message'],
+    [13, EMPTY, 'bytes'],
+    [14, env.Device && env.Device.AppVersion ? env.Device.AppVersion : MEDUSA_NOTSET, 'string'],
+    [15, env.PPID, 'sint'],
+    [18, ts + env.Clock18, 'sint'],
+    [19, ts + env.Clock19, 'sint'],
+    [20, ts + env.Clock20, 'sint'],
+  ]);
+}
+
+function medusaV5JsonCurrent(env) {
+  return '{"cmr":16777216,"cmr2":16777216,"un_h":' + env.UnH
+    + ',"vpn":0,"sts":' + env.Sts
+    + ',"kd":0,"fkd":' + env.Fkd
+    + ',"pd":' + env.Pd
+    + ',"lp":' + JSON.stringify(env.Lp)
+    + ',"fl":' + JSON.stringify(env.Fl)
+    + ',"dyn":"","do":0,"tk":true}';
+}
+
+/** 8 位循环右移（variant 5 的 padding 用）。 */
+function ror8(value, count) {
+  const n = count & 7;
+  return (((value >> n) | (value << (8 - n))) & 255) >>> 0;
+}
+
+// f13V5 variant 5（MD5 压缩）常量，来自 openhongguo sign/f13_v5.go。
+const F13_V5_IV = [0x79e0f2fb, 0xc8b52570, 0xebc2f8cd, 0x7c104d93];
+const F13_V5_FINAL = [0x19be4866, 0xe85986b4, 0xe19b326e, 0x71d1d7d4];
+const F13_V5_PAD = [0x84, 0x96, 0x77, 0x9d, 0xd4, 0x15, 0x0b, 0xf8];
+const F13_V5_K = [
+  0xa7aefe20, 0x7149f1d6, 0x47e4ca07, 0xe9b58f67, 0x93b924de, 0xc614d0f5, 0x38afe0ef, 0xb2bbad73,
+  0xe24444c3, 0x9d3aec9b, 0xdf7b37e4, 0xd8b16d40, 0xf8ac31b8, 0x76b9a90b, 0x31d833ee, 0x953fce64,
+  0x6a6b2b48, 0x8c138276, 0x6d24a010, 0x18da124b, 0xbbeb82ee, 0x39f7ea56, 0x149f4fe1, 0x229946bc,
+  0x0327f309, 0xf4f50e66, 0x62d569aa, 0x78419f92, 0x4db088a7, 0x7430a018, 0xf31d88f4, 0x2f4ed651,
+  0x9b13fe59, 0x45c5910d, 0x374bf0ec, 0xd5a5b69e, 0xefaceb16, 0x714f4811, 0x4c98233b, 0xc9e6e7b1,
+  0xd0623b3f, 0xdf5e4f6f, 0xccb31244, 0xaddab856, 0x6faf9c9e, 0x62804e10, 0x6fa7e29d, 0x7e429d51,
+  0xcdb31e01, 0xb339e419, 0xe497a8a3, 0xebeca6bc, 0x1746cd57, 0xfbf4f54a, 0xd5ea2a8b, 0xb4f02ed2,
+  0x0512b192, 0xefad4d29, 0xd59bec05, 0x2a1436e2, 0xfaea73c1, 0x1ebdbae8, 0x8ff257bd, 0x2d59351d,
+];
+const F13_V5_ORDER = [
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+  0, 10, 5, 14, 3, 4, 15, 13, 6, 1, 12, 8, 9, 7, 11, 2,
+  8, 10, 3, 1, 14, 3, 7, 2, 5, 0, 13, 9, 11, 4, 15, 12,
+  8, 9, 15, 10, 2, 6, 5, 13, 13, 1, 7, 3, 11, 14, 4, 12,
+];
+const F13_V5_SHIFT = [
+  7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+  5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+
+function f13V5HeadMd5(querySm3, bodyMd5, ts) {
+  const input = concat(querySm3, bodyMd5, le32(ts | 0));
+  const pad = Buffer.alloc(8);
+  for (let i = 0; i < F13_V5_PAD.length; i++) {
+    pad[i] = ror8(F13_V5_PAD[i], (ts - 1) & 7);
+  }
+  const w = (at) => readLe32(input, at) >>> 0;
+  const m = [
+    w(36), w(32), readLe32(pad, 0) >>> 0, w(24),
+    w(40), w(28), readLe32(pad, 4) >>> 0, w(44),
+    w(0), w(4), w(8), 0x1a0,
+    w(48), w(16), w(20), w(12),
+  ];
+  const iv = F13_V5_IV.map((v) => ror(v, (ts + 2) & 31));
+  let a = iv[0]; let b = iv[1]; let c = iv[2]; let d = iv[3];
+  for (let i = 0; i < 64; i++) {
+    let f;
+    const round = Math.floor(i / 16);
+    if (round === 0) f = (d ^ (b & (c ^ d))) | 0;
+    else if (round === 1) f = (c ^ (d & (b ^ c))) | 0;
+    else if (round === 2) f = (b ^ c ^ d) | 0;
+    else f = (c ^ (b | ~d)) | 0;
+    const k = ror(F13_V5_K[i], (ts + 3 + round) & 31);
+    const x = (a + f + m[F13_V5_ORDER[i]] + k) | 0;
+    a = d;
+    d = c;
+    c = b;
+    b = (b + rotl(x, F13_V5_SHIFT[i])) | 0;
+  }
+  const state = [a, b, c, d];
+  const out = Buffer.alloc(16);
+  for (let i = 0; i < 4; i++) {
+    putLe32(out, i * 4, ((iv[i] + state[i]) ^ ror(F13_V5_FINAL[i], (ts + 8) & 31)) | 0);
+  }
+  return out;
+}
+
+function f13V5Tail(head) {
+  let h = 0x20220420;
+  for (let i = 0; i < 8; i++) {
+    const cb = head[i] & 0xff;
+    if ((i & 1) === 0) h = (((h << 7) ^ cb ^ (h >>> 3) ^ h)) | 0;
+    else h = ~(((h << 11) | cb) ^ (h >>> 5) ^ h) | 0;
+  }
+  const out = le32(h);
+  out[0] &= 0xdb;
+  out[3] ^= 1;
+  return out;
+}
+
+/** 与 openhongguo f13V5 一致：返回 variant 5/12 的 20 字节，其他分支返回 null。 */
+function hashF13V5Full(querySm3, bodyMd5, ts) {
+  const iv = getIv(getIv(getIv(0x20230928, querySm3), bodyMd5), le32(ts | 0));
+  const variant = iv & 15;
+  if (variant !== 5 && variant !== 12) return null;
+  const head = variant === 5
+    ? f13V5HeadMd5(querySm3, bodyMd5, ts)
+    : sliceBytes(hashF13V5(querySm3, bodyMd5, le32(ts | 0), ts), 0, 16);
+  return concat(head, f13V5Tail(head));
+}
+
+function medusaInputCurrent(query, body, ts) {
+  const q = sm3(Buffer.from(query, 'utf8'));
+  const f13 = hashF13V5Full(q, bodyMd5V5(body), ts);
+  if (f13 === null) return null;
+  return { querySM3: q, f13, ts };
+}
+
+/** 模拟器布局的 device block（env.Device 为空时），按 openhongguo medusaV5Device。 */
+function medusaDeviceEmulatorCurrent(deviceId, env) {
+  const out = [];
+  out.push([1, 1, 'sint'], [3, '8662', 'string'], [4, deviceId, 'string']);
+  for (let tag = 5; tag <= 40; tag++) {
+    if (tag === 5 || tag === 6 || (tag >= 11 && tag <= 13) || tag === 15
+        || tag === 22 || (tag >= 30 && tag <= 37)) {
+      out.push([tag, MEDUSA_NOTSET, 'string']);
+    } else if ((tag >= 7 && tag <= 10) || tag === 14 || (tag >= 23 && tag <= 25)
+        || tag === 27 || tag === 29 || tag === 38) {
+      out.push([tag, -999999, 'sint']);
+    } else if (tag >= 16 && tag <= 21) {
+      out.push([tag, -999999, 'float']);
+    } else if (tag === 26 || tag === 28 || tag === 40) {
+      out.push([tag, env.LaunchMillis, 'sint']);
+    }
+  }
+  return proto(out);
+}
+
+function medusaEnvGeneric(ts, deviceId, env, rnd) {
+  if (env.Device !== null && env.Device !== undefined) {
+    return medusaV5EnvCurrent(ts, deviceId, Object.assign({}, env, {
+      Device: env.Device,
+    }), rnd);
+  }
+  return proto([
+    [6, MEDUSA_ENV_VERSION, 'string'],
+    [7, env.PID, 'sint'],
+    [8, env.Channel, 'string'],
+    [12, medusaDeviceEmulatorCurrent(deviceId, env), 'message'],
+    [13, EMPTY, 'bytes'],
+    [14, MEDUSA_NOTSET, 'string'],
+    [15, env.PPID, 'sint'],
+    [18, ts + env.Clock18, 'sint'],
+    [19, ts + env.Clock19, 'sint'],
+    [20, ts + env.Clock20, 'sint'],
+  ]);
+}
+
+/** 可传入固定 env/rnd，供上游测试向量逐字节比对。 */
+function medusaMessageCurrent(input, deviceId, env, rnd) {
+  const device = env.Device === null || env.Device === undefined ? null : env.Device;
+  const flags = device === null ? MEDUSA_EMULATOR_FLAGS : MEDUSA_DEVICE_FLAGS;
+  const counters = device === null
+    ? [[1, MEDUSA_UNSET, 'sint'], [2, MEDUSA_UNSET, 'sint'],
+      [3, MEDUSA_UNSET, 'sint'], [5, MEDUSA_UNSET, 'sint']]
+    : [[1, env.Counter || 1, 'sint'], [2, 5, 'sint'],
+      [3, MEDUSA_UNSET, 'sint'], [5, MEDUSA_UNSET, 'sint']];
+  const fields = [
+    [1, V5.MAGIC16, 'bytes'],
+    [2, 5, 'sint'],
+    [3, rnd.Message, 'sint'],
+    [4, '8662', 'string'],
+    [5, deviceId, 'string'],
+    [6, V5.LICENSE, 'string'],
+  ];
+  if (device !== null && device.AppVersion) fields.push([7, device.AppVersion, 'string']);
+  fields.push(
+    [8, MEDUSA_SDK_VERSION, 'string'],
+    [9, MEDUSA_SDK_CODE, 'sint'],
+    [10, flags, 'bytes'],
+    [12, input.ts, 'sint'],
+    [13, input.f13, 'bytes'],
+    [14, input.querySM3.subarray(0, 6), 'bytes'],
+    [15, proto(counters), 'message'],
+    [17, input.ts, 'sint'],
+    [20, 'none', 'string'],
+    [21, env.Status, 'sint'],
+    [23, medusaEnvGeneric(input.ts, deviceId, env, rnd), 'message'],
+    [24, medusaV5JsonCurrent(env), 'string']);
+  return proto(fields);
+}
+
+/** 可传入固定 env/rnd，供上游测试向量逐字节比对。 */
+function assembleMedusaV5Current(input, deviceId, env, rnd) {
+  const device = env.Device === null || env.Device === undefined ? null : env.Device;
+  const flags = device === null ? MEDUSA_EMULATOR_FLAGS : MEDUSA_DEVICE_FLAGS;
+  const message = medusaMessageCurrent(input, deviceId, env, rnd);
+
+  const hash = sm3(concat(V5.SIGN_KEY, le32(rnd.Key), V5.SIGN_KEY));
+  const high = (rnd.Key >>> 16) & 255;
+  const seed = le32(~((((high << 11) | (rnd.Key >>> 24)) ^ (high >>> 5) ^ high)) | 0);
+  let transformed = concat(flags, xmxor(message, hash));
+  transformed = Buffer.from(transformed).reverse();
+  for (let i = 0; i < transformed.length; i++) {
+    transformed[i] = (transformed[i] ^ seed[(~i) & 3]) & 0xff;
+  }
+  const check = (0x18000001 | ((input.querySM3[0] & 63) << 14)
+    | ((input.f13[0] & 63) << 8)) | 0;
+  const packed = concat(Buffer.from([0xca]), le32(rnd.Packed), le32(check), transformed,
+    Buffer.from([(rnd.Key >>> 16) & 255, (rnd.Key >>> 24) & 255]));
+  const encrypted = new AesV3(md5(V5.SIGN_KEY.subarray(0, 16)), input.ts, true)
+    .encrypt(packed, md5(V5.SIGN_KEY.subarray(16, 32)));
+  const prefix = concat(le32(5), V5.MAGIC16);
+  const tsBytes = le32(input.ts | 0);
+  for (let i = 0; i < prefix.length; i++) prefix[i] = (prefix[i] ^ tsBytes[i & 3]) & 0xff;
+  return b64(concat(prefix,
+    Buffer.from([rnd.Key & 255, (rnd.Key >>> 8) & 255, 0, 1]), encrypted));
+}
+
+/** 按 openhongguo v0.4.1 的真机布局构造 x-medusa（player/v1 主链路）。 */
+function buildMedusaV5Current(url, body, ts, query, deviceId) {
+  const input = medusaInputCurrent(query, body, ts);
+  if (input === null) throw new Error('x-medusa 命中不支持的 f13 分支');
+  const id = String(deviceId || '0');
+  const baseEnv = processMedusaEnv();
+  const device = medusaDeviceOf(query, id);
+  const env = Object.assign({}, baseEnv, {
+    Device: device,
+    Counter: device === null ? 1 : nextMedusaCount(),
+  });
+  const rnd = {
+    Message: rndUint31(),
+    Key: rndUint31(),
+    Packed: rndUint31(),
+  };
+  return assembleMedusaV5Current(input, id, env, rnd);
+}
+
+/**
+ * player/v1 主链路签名。values 里必须预置 `_rticket` 占位符，
+ * 因为它的位置属于 query 顺序的一部分（openhongguo 抓包在第 4 位）。
+ */
+function signPlaybackV5Current(base, values, body, now) {
+  const baseMs = (now === undefined || now === null) ? Date.now() : now;
+  const ts = Math.floor(baseMs / 1000);
+  const vals = Object.assign({}, values);
+  const deviceId = String(vals.device_id || '0');
+  for (let offset = 0; offset <= 1023; offset++) {
+    vals._rticket = String(baseMs + offset);
+    const query = encodeQuery(vals);
+    const url = base + '?' + query;
+    if (branchV5(url, body, ts) !== 0) continue;
+    const headers = {
+      'x-khronos': String(ts),
+      'x-helios': heliosWith(ts, rndUint31(), V5.LICENSE),
+      'x-medusa': buildMedusaV5Current(url, body, ts, query, deviceId),
+      'x-xs-from-web': '0',
+    };
+    if (body !== null && body.length > 0) {
+      headers['Content-Type'] = 'application/json; charset=utf-8';
+      headers['x-ss-stub'] = md5(body).toString('hex').toUpperCase();
+    }
+    return { url, headers, query, ticket: baseMs + offset };
+  }
+  throw new Error('无法生成 player/v1 播放签名（1024 个 ticket 内未命中分支）');
+}
+
 module.exports = {
   sign,
   branchOf,
   signPlaybackV5,
+  signPlaybackV5Current,
   branchV5,
   hashF13V5,
   buildMedusaV5,
+  buildMedusaV5Current,
+  medusaInputCurrent,
+  medusaMessageCurrent,
+  assembleMedusaV5Current,
   javaUrlEncode,
+  xmxor,
   AesV3,
 };

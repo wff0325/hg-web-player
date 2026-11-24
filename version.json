@@ -1,4 +1,4 @@
 {
-  "version": "v2.1.9",
-  "note": "修复两处：①「缓存本集+后两集、滚动删旧缓存」此前实际不生效——播放重试会递增 loadToken 把 3 秒定时器里的预热和滚动删除整个跳过；改用换集才递增的 windowSeq，并在换集时立即淘汰窗口外旧缓存。②首页冷启动 8 秒→0.1 秒——SDK 榜单/分类/批量详情缓存落盘（server/config/ohg-cache.json，受更新保护），进程重启后直接命中；磁盘 TTL 6 小时可调。"
+  "version": "v2.2.0",
+  "note": "修复播放地址失效（无直链）。根因不是签名或端点过时，而是上游从 2026-11-23 起对新注册的匿名设备整体行为风控（一律 HTTP 200 + 0 字节）；参考 legend0/hongguo-desktop 的做法，内置其已验证基准设备作为默认/保底播放身份，避免反复注册随机设备。实测 v5 preload/v1 + field21=312 + 该身份：单集返回约 23KB 完整 video_model，/video_url 端到端返回真实 CDN 直链，4 个真实分集批量验证均成功。field21 校正为 312，medusa deviceInfo 对齐 N3urda 精简 14 字段。可用 HG_PLAYBASELINE_OFF=1 关闭基准设备回退原注册逻辑。"
 }

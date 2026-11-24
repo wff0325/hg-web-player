@@ -96,6 +96,53 @@ const VIDEO_UA = 'Dalvik/2.1.0 (Linux; U; Android 16; 25053RT47C Build/BP2A.2506
 const VERSION_NAME = '7.4.5.32';
 
 /**
+ * beilunyang/openhongguo v0.4.1 的当前播放主链路。
+ *
+ * 2026-11-24 上游把真机 medusa 状态从模拟器的 377 改成 369 后，
+ * 旧的 preload/v1 + device_level=2 + dr_scene=preload 整条链路开始回空包；
+ * 当前 App 走 player/v1、7.4.3.32 档、device_level=1、dr_scene=player。
+ * 下面这组常量与上游 PlaybackV5Pairs/PlaybackV5Body 逐字对齐，
+ * 其中 _rticket 占位符的位置属于 query 顺序，不能挪到末尾。
+ */
+const PLAYBACK_V5_PATH = '/novel/player/multi_video_model/player/v1';
+const PLAYBACK_V5_HOST = 'api5-normal-sinfonlinea.fqnovel.com';
+const PLAYBACK_V5_API = 'https://' + PLAYBACK_V5_HOST + PLAYBACK_V5_PATH;
+const PLAYBACK_V5_UA = 'com.phoenix.read/74332 (Linux; U; Android 14; zh_CN; '
+  + '23127PN0CC; Build/UKQ1.230804.001; Cronet/TTNetVersion:8d40f833 2026-03-03 '
+  + 'QuicVersion:21ac1950 2025-11-18)';
+const PLAYBACK_V5_QUERY = {
+  device_platform: 'android',
+  os: 'android',
+  ssmix: 'a',
+  _rticket: '',
+  cdid: '',
+  channel: 'xiaomi_8662_64',
+  aid: '8662',
+  app_name: 'novelread',
+  version_code: '74332',
+  version_name: '7.4.3.32',
+  manifest_version_code: '74332',
+  update_version_code: '74332',
+  resolution: '1200*2670',
+  dpi: '460',
+  device_type: '23127PN0CC',
+  device_brand: 'Xiaomi',
+  language: 'zh',
+  os_api: '34',
+  os_version: '14',
+  ac: 'wifi',
+  host_abi: 'arm64-v8a',
+  dragon_device_type: 'phone',
+  pv_player: '74332',
+  compliance_status: '0',
+  need_personal_recommend: '1',
+  player_so_load: '1',
+  is_android_pad_screen: '0',
+  iid: '',
+  device_id: '',
+};
+
+/**
  * v5 播放接口的 query 参数。
  *
  * 2026-11-24 currentApp 档：7.4.5.32 / update_64 / 25053RT47C / Android 16。
@@ -270,13 +317,140 @@ async function pickFastest(cands, trace) {
  * @param {object} [trace] 可选的分段诊断容器
  * @returns {Promise<{rows: Row[], seed: Buffer|null}>}
  */
+/**
+ * 上游当前主链路：player/v1 + 真机 medusa。
+ *
+ * 与旧 preload/v1 的区别不只是路径：query 顺序、版本档、设备画像、
+ * body 的 device_level / dr_scene、medusa 环境块全部按 openhongguo v0.4.1。
+ * 这里先单独跑一次；成功就直接返回，失败仍保留旧链路兜底。
+ */
+async function fetchPlaybackV5(vid, trace, host) {
+  const api = 'https://' + (host || PLAYBACK_V5_HOST) + PLAYBACK_V5_PATH;
+  const body = zlib.gzipSync(Buffer.from(Json.stringify(payloadCurrent(vid)), 'utf8'));
+  if (trace !== null && trace !== undefined) {
+    trace.currentBodyBytes = body.length;
+    trace.currentPayload = Json.stringify(payloadCurrent(vid));
+    trace.currentAttempts = [];
+  }
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const identity = attempt === 0
+      ? await PlaybackDevice.getPlaybackDevice()
+      : await PlaybackDevice.getPlaybackDevice(true);
+    const values = Object.assign({}, PLAYBACK_V5_QUERY, {
+      iid: identity.iid, cdid: identity.cdid, device_id: identity.device_id,
+    });
+    const signed = PureSign.signPlaybackV5Current(api, values, body, Date.now());
+    const headers = Object.assign({
+      'User-Agent': PLAYBACK_V5_UA,
+      Accept: 'application/json; charset=utf-8,application/x-protobuf',
+      'Content-Encoding': 'gzip',
+      'x-ss-dp': '8662',
+      lc: '101',
+      'x-reading-request': String(signed.ticket) + '-'
+        + String(crypto.randomBytes(4).readUInt32BE(0) & 0x7fffffff),
+    }, signed.headers);
+    if (identity.cookie) headers.Cookie = identity.cookie;
+    const info = {
+      index: attempt + 1,
+      ticket: String(signed.ticket),
+      headerKeys: Object.keys(signed.headers).sort(),
+      host: PLAYBACK_V5_HOST,
+    };
+    if (trace !== null && trace !== undefined) trace.currentAttempts.push(info);
+    const res = await Http.send({
+      url: signed.url, method: 'POST', timeoutMs: 15000, headers, body,
+    });
+    info.status = res.status;
+    info.bytes = res.body.length;
+    if (res.status !== 200) {
+      lastErr = new Error('player/v1 HTTP ' + res.status);
+      continue;
+    }
+    const txt = res.text();
+    const j = Json.parseObject(txt);
+    info.code = j === null ? null : (j.code === undefined ? j.Code : j.code);
+    const data = j === null ? null : Json.optObj(j.data);
+    info.hasData = data !== null;
+    info.snippet = txt.slice(0, 240);
+    if (data !== null) {
+      return playbackModelFrom(j, vid, trace);
+    }
+    lastErr = new Error('player/v1 未返回 data');
+    if (attempt === 0) continue;
+  }
+  throw lastErr || new Error('player/v1 无响应');
+}
+
+/** player/v1 的 data -> video_model，兼容 data["1004"] 分组与顶层 video_model。 */
+function playbackModelFrom(j, vid, trace) {
+  const data = Json.optObj(j.data);
+  if (data === null) throw new Error('player/v1 未返回 data');
+  const buckets = [Json.optObj(data['1004']), data];
+  let entry = null;
+  for (const bucket of buckets) {
+    if (bucket === null) continue;
+    if (!isEmpty(bucket.video_model)) { entry = bucket; break; }
+    const hit = Json.optObj(bucket[vid]);
+    if (hit !== null && !isEmpty(hit)) { entry = hit; break; }
+  }
+  if (entry === null) throw new Error('player/v1 未返回所选分集');
+  const model = asObject(entry.video_model);
+  if (isEmpty(model)) throw new Error('player/v1 未返回 video_model');
+  if (trace !== null && trace !== undefined) {
+    trace.dataKeys = Object.keys(data);
+    trace.route = 'player-v5';
+    trace.host = PLAYBACK_V5_HOST;
+  }
+  return model;
+}
+
+/** player/v1 请求体：上游 device_level=1、dr_scene=player。 */
+function payloadCurrent(vid) {
+  const biz = Json.obj();
+  biz.detail_page_version = 0;
+  biz.device_level = 1;
+  biz.disable_digg_stat = false;
+  biz.disable_video_relate_book = false;
+  biz.need_all_video_definition = true;
+  biz.need_mp4_align = false;
+  biz.use_os_player = false;
+  biz.use_server_dns = false;
+  biz.video_platform = 1024;
+  const mixed = Json.obj();
+  mixed['1004'] = [vid];
+  const out = Json.obj();
+  out.biz_param = biz;
+  out.mixed_video_id_map = mixed;
+  out.dr_scene = 'player';
+  return out;
+}
+
 async function loadModel(vid, trace) {
   const hasPlayable = (parsed) => parsed !== null
     && parsed.rows.length > 0 && !allBytevc2(parsed.rows);
   let lastErr = null;
   let fallbackParsed = null;
 
-  // 2026-11-24 主链路：currentApp 7.4.5.32 preload/v1，按官方域名表顺序尝试。
+  // 2026-11-24：N3urda/hongguoTV main 当前仍以 currentApp 7.4.5.32 preload/v1
+  // 为主链路；openhongguo v0.4.1 的 player/v1 分支保留为显式探测用，默认不跑，
+  // 避免每次播放先白等两次空响应。
+  if (Log.env('HG_PLAYBACK_V5_PROBE', null) !== null) {
+    try {
+      const model = await fetchPlaybackV5(vid, trace);
+      const parsed = await rowsFromModel(model, trace);
+      if (parsed !== null && parsed.rows.length > 0) fallbackParsed = parsed;
+      if (hasPlayable(parsed)) return parsed;
+      lastErr = new Error('player/v1 未提供可播档位');
+    } catch (e) {
+      lastErr = e;
+      if (trace !== null && trace !== undefined) {
+        trace.currentError = String((e && e.message) || e);
+      }
+    }
+  }
+
+  // 主链路：currentApp 7.4.5.32 preload/v1，按官方域名表顺序尝试。
   for (const host of VIDEO_API_HOSTS) {
     try {
       const model = await loadModelPost(vid, trace, host);
