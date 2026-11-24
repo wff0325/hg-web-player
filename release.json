@@ -3,7 +3,8 @@
   "code": 40,
   "tag": "v3.12",
   "name": "电视版 v3.12（播放协议升级）",
-  "apk": "https://github.com/wff0325/hg-web-player/releases/download/v3.12/minireel-tv-android43.apk",
+  "apk": "https://raw.githubusercontent.com/wff0325/hg-web-player/main/apk/minireel-tv-android43.apk",
+  "apk_backup": "https://github.com/wff0325/hg-web-player/releases/download/v3.12/minireel-tv-android43.apk",
   "size": 2094761,
   "notes": "播放取址升级到 7.4.5.32/preload/v1；缓存改为本集+后两集滚动删除；新增在线更新；版本号显示修复。"
 }
