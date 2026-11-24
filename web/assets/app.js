@@ -1885,10 +1885,20 @@
       dm.rows, (v) => setDmRows(v));
     group('弹幕速度', [{ value: 'fast', label: '快' }, { value: 'medium', label: '中' }, { value: 'slow', label: '慢' }],
       dm.speed, (v) => setDmSpeed(v));
-    group('弹幕透明度', [
-      { value: 1, label: '100%' }, { value: 0.8, label: '80%' },
-      { value: 0.6, label: '60%' }, { value: 0.4, label: '40%' }
-    ], dm.opacity, (v) => setDmOpacity(v));
+    // 透明度：滑轨（拖动实时生效，松手才 toast + 重建，避免打断拖动）
+    menu.appendChild(el('div', 'group-title', '弹幕透明度'));
+    const opRow = el('div', 'row tools-opacity');
+    const opRng = el('input');
+    opRng.type = 'range'; opRng.min = '10'; opRng.max = '100'; opRng.step = '5';
+    opRng.value = String(Math.round(dm.opacity * 100));
+    const opVal = el('span', 'val', Math.round(dm.opacity * 100) + '%');
+    opRng.addEventListener('input', () => {
+      opVal.textContent = opRng.value + '%';
+      setDmOpacityLive(Number(opRng.value) / 100);
+    });
+    opRng.addEventListener('change', () => setDmOpacity(Number(opRng.value) / 100));
+    opRow.appendChild(opRng); opRow.appendChild(opVal);
+    menu.appendChild(opRow);
     menu.appendChild(el('div', 'hint', '底栏图标：弹幕 / 上一集 / 下一集 / 选集 / 全屏 / 工具。'
       + '锁定后控件隐藏、点画面不再暂停；右侧中部可解锁。'));
   }
@@ -2123,6 +2133,35 @@
     return lo;
   }
 
+  /**
+   * 弹幕离屏移除：绑定动画 finished，暂停播放时动画 pause，finished 不会完成，
+   * 弹幕就会真正定格在画面上（setTimeout 是墙钟，暂停时仍会把弹幕移除掉）。
+   * 拿不到动画才退回 setTimeout。
+   */
+  function dmArmRemoval(node, fallbackMs) {
+    requestAnimationFrame(() => {
+      const anims = node.getAnimations ? node.getAnimations() : [];
+      if (anims.length && anims[0].finished) {
+        anims[0].finished.then(() => node.remove()).catch(() => {});
+        if (video.paused) anims.forEach((a) => { try { a.pause(); } catch (_) {} });
+      } else {
+        setTimeout(() => node.remove(), fallbackMs);
+      }
+    });
+  }
+
+  /** 视频暂停/恢复时，冻结/继续画面上所有在飞的弹幕动画。 */
+  function dmFreeze(freeze) {
+    const layer = $('dmLayer');
+    if (!layer) return;
+    for (const node of layer.children) {
+      const anims = node.getAnimations ? node.getAnimations() : [];
+      for (const a of anims) {
+        try { if (freeze) a.pause(); else a.play(); } catch (_) {}
+      }
+    }
+  }
+
   function dmEmit(item) {
     const layer = $('dmLayer');
     if (!layer || !layer.clientWidth) return;
@@ -2138,7 +2177,7 @@
       el2.style.top = item.mode === 'top' ? '10%' : '';
       if (item.mode === 'bottom') el2.style.bottom = '18%';
       layer.appendChild(el2);
-      setTimeout(() => el2.remove(), 4400);
+      dmArmRemoval(el2, 4400);
       return;
     }
 
@@ -2168,7 +2207,7 @@
       el2.style.transition = 'transform ' + dur.toFixed(2) + 's linear';
       el2.style.transform = 'translateX(' + (-w - 24) + 'px)';
     });
-    setTimeout(() => el2.remove(), dur * 1000 + 200);
+    dmArmRemoval(el2, dur * 1000 + 200);
   }
 
   function dmTick() {
@@ -2284,10 +2323,21 @@
     toast('弹幕字号：' + ({ s: '小', m: '中', l: '大' }[dm.size]));
   }
 
-  function setDmOpacity(value) {
+  /** 拖动透明度滑轨时实时生效：不重建菜单（否则会打断拖动），只改状态+已上屏弹幕+另一处滑块。 */
+  function setDmOpacityLive(value) {
     const v = Number(value);
     dm.opacity = Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.9;
     store.set('mr.dmOpacity', dm.opacity);
+    const layer = $('dmLayer');
+    if (layer) for (const n of layer.children) n.style.opacity = String(dm.opacity);
+    const sr = document.querySelector('#danmakuSettings .setting-range input');
+    if (sr) sr.value = String(Math.round(dm.opacity * 100));
+    const sv = document.querySelector('#danmakuSettings .setting-range .val');
+    if (sv) sv.textContent = Math.round(dm.opacity * 100) + '%';
+  }
+
+  function setDmOpacity(value) {
+    setDmOpacityLive(value);
     renderToolsMenu();
     renderDanmakuSettings();
     toast('弹幕透明度：' + Math.round(dm.opacity * 100) + '%');
@@ -2388,8 +2438,14 @@
     if (!d || !video.buffered.length) return;
     $('seekBuffer').style.width = ((video.buffered.end(video.buffered.length - 1) / d) * 100) + '%';
   });
-  video.addEventListener('play', () => { $('bigPlay').classList.add('hide'); showControls(); });
-  video.addEventListener('pause', () => { $('bigPlay').classList.remove('hide'); player.classList.remove('idle'); saveProgress(); });
+  video.addEventListener('play', () => {
+    $('bigPlay').classList.add('hide'); showControls();
+    dmFreeze(false);   // 恢复播放：画面上冻住的弹幕继续飞
+  });
+  video.addEventListener('pause', () => {
+    $('bigPlay').classList.remove('hide'); player.classList.remove('idle'); saveProgress();
+    dmFreeze(true);    // 暂停播放：弹幕动画一起冻结，不再滚
+  });
   video.addEventListener('ended', () => { saveProgress(); nextEpisode(true); });
 
   $('bigPlay').addEventListener('click', () => video.play().catch(() => {}));
@@ -2682,6 +2738,53 @@
     }
   }
 
+  /**
+   * 后端更新后服务自动重启：等它「先断后起」再刷新页面。
+   * 探测 /health：
+   *   1) 先等旧进程退出（连续若干次探测失败）——最多 25s；
+   *   2) 再等新进程就绪（探测成功）——最多 90s；
+   * 两段都满足就 reload；任一段超时则提示手动刷新，绝不让页面永久转圈。
+   */
+  function waitForRestart() {
+    const cfg = window.MR_CONFIG || {};
+    const API = (cfg.API_BASE || '').replace(/\/+$/, '');
+    const health = API + '/health';
+    const deadline1 = Date.now() + 25000;   // 等旧进程退出
+    const deadline2 = Date.now() + 25000 + 90000; // 等新进程起来（绝对时间）
+    let downSeen = 0;   // 连续失败次数
+    (async function step() {
+      let ok = false;
+      try {
+        const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = ctl ? setTimeout(() => ctl.abort(), 2000) : 0;
+        const r = await fetch(health, { cache: 'no-store', signal: ctl ? ctl.signal : undefined });
+        if (timer) clearTimeout(timer);
+        ok = r.ok;
+      } catch (e) { ok = false; }
+      const now = Date.now();
+      if (downSeen < 3) {
+        // 阶段一：等旧进程退出（连续 3 次探测失败视为已断）
+        if (!ok) downSeen += 1; else downSeen = 0;
+        if (downSeen >= 3) {
+          toast('服务已停止，正在等待重启…', 2500);
+          downSeen = 3; // 进入阶段二标记
+          return setTimeout(step, 500);
+        }
+        if (now < deadline1) return setTimeout(step, 400);
+        // 超时仍未断：可能助手没杀掉旧进程，保险起见直接刷新一次
+        toast('更新完成，正在刷新…', 1800);
+        return setTimeout(() => location.reload(), 600);
+      }
+      // 阶段二：等新进程就绪
+      if (ok) {
+        toast('服务已重启，正在刷新…', 1500);
+        return setTimeout(() => location.reload(), 500);
+      }
+      if (now < deadline2) return setTimeout(step, 600);
+      toast('自动重启超时，请手动刷新页面', 5000);
+    })();
+  }
+
   /** 新版本提示横幅：由 index.html 的更新引导脚本派发 mr:update 触发。 */
   function bindUpdateBanner() {
     const banner = $('updateBanner');
@@ -2708,8 +2811,10 @@
           // 顶栏版本号立即更新，让用户看得到更新结果
           const vt = $('versionTag');
           if (vt && ver) vt.textContent = ver;
-          if (info && info.restart) {
-            toast('已更新 ' + n + ' 个文件；后端代码有更新，请重启服务后生效（版本 ' + ver + '）', 6000);
+          if (info && info.restarting) {
+            // 后端代码有更新，服务正在自动重启：等它起来再刷新，全程无需手动操作。
+            toast('已更新 ' + n + ' 个文件，服务正在自动重启，请稍候…（版本 ' + ver + '）', 5000);
+            waitForRestart();
           } else {
             toast('已更新 ' + n + ' 个文件，正在刷新…（版本 ' + ver + '）', 1800);
             setTimeout(() => location.reload(), 900);

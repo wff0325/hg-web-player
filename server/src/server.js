@@ -189,7 +189,50 @@ class Server {
     if (timer.unref) timer.unref();
   }
 
+  /**
+   * 同步完成后自动重启：拉起独立助手 → 关闭本服务 → 进程退出。
+   * 助手会等本进程退出、端口释放后用同一套参数重新拉起服务，
+   * 这样后端代码（server/src/*）的更新无需用户手动重启即可生效。
+   * 只在 web-sync 报告后端有变化时调用；前端同步会据此轮询等待。
+   */
+  scheduleAutoRestart() {
+    if (this._restarting) return;
+    this._restarting = true;
+    const cp = require('child_process');
+    const helper = path.join(__dirname, 'restart-helper.js');
+    const host = this.bindHost || '127.0.0.1';
+    const port = this.bindPort || Config.num('api.port', 8000);
+    const cwd = process.cwd();
+    const script = path.join(__dirname, 'main.js');
+    // 透传原始启动参数（去掉 node 与入口脚本本身），例如 --watch 等
+    const extraArgs = process.argv.slice(2).filter((a) => a.indexOf('--sync-web') < 0);
+    const args = [helper,
+      '--old-pid', String(process.pid),
+      '--port', String(port),
+      '--cwd', cwd,
+      '--script', script,
+      '--args', extraArgs.join(',')];
+    try {
+      const child = cp.spawn(process.execPath, args, {
+        cwd, detached: true, stdio: 'ignore', windowsHide: true,
+      });
+      child.unref();
+      Log.info('后端已更新，正在自动重启服务（新进程由重启助手拉起）');
+    } catch (e) {
+      Log.warn('启动重启助手失败，请手动重启：' + String(e && e.message || e));
+      this._restarting = false;
+      return;
+    }
+    // 给响应和助手一点时间，然后关闭监听并退出；进程退出后由助手重新拉起。
+    setTimeout(() => {
+      try { if (this.httpServer) this.httpServer.close(); } catch (e) { /* 忽略 */ }
+      setTimeout(() => process.exit(0), 300);
+    }, 400);
+  }
+
   start(host, port) {
+    this.bindHost = host;
+    this.bindPort = port;
     this.httpServer = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => {
         Log.error('未捕获的处理异常: ' + (e && e.message ? e.message : e), e);
@@ -433,7 +476,13 @@ class Server {
         m.version = webVersion(this.webDir);
         m.display = displayVersion(this.webDir);
         m.restart = r.restart === true;   // 后端文件有更新，需重启进程生效
+        // 后端有变化：本进程会自动重启，告诉前端进入「等待重启」流程
+        m.restarting = m.restart;
         Res.json(req, res, 200, m);
+        if (m.restart) {
+          // 等响应 flush 完再拉起助手并退出，避免前端拿到半截响应
+          setTimeout(() => this.scheduleAutoRestart(), 200);
+        }
       } catch (e) {
         Res.fail(req, res, 502, '更新失败：' + String((e && e.message) || e));
       }

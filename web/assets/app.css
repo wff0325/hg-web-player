@@ -726,6 +726,12 @@ body.hero-bg-view .topic-chip.active {
 }
 .tools-menu .row button:hover { background: rgba(255,255,255,.12); }
 .tools-menu .row button.on { background: var(--accent); color: #14100a; font-weight: 700; }
+/* 弹幕透明度滑轨：整行铺满，滑块伸缩，数值右对齐 */
+.tools-menu .row.tools-opacity { flex-wrap: nowrap; align-items: center; gap: 8px; padding: 2px 4px 4px; }
+.tools-menu .row.tools-opacity input {
+  flex: 1 1 auto; min-width: 0; width: auto; accent-color: var(--accent); cursor: pointer;
+}
+.tools-menu .row.tools-opacity .val { min-width: 38px; text-align: right; font-size: 12px; color: #fff; }
 .tools-menu .hint { font-size: 10.5px; color: var(--muted); padding: 6px 4px 2px; line-height: 1.5; }
 .ep-sheet {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 96;
