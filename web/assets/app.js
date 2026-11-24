@@ -304,11 +304,12 @@
   async function renderHomeFeed(gen) {
     if (!homeHero || !homeSections) return;
     try {
+      // 三条分区轨道也用各自分类的官方热播榜，保证显示的是全类别热度最高的剧
       const [rank, real, comic, ai] = await Promise.all([
-        api('/rank', { board: 'hot', limit: 6 }).catch(() => null),
-        api('/catalog', { channel: 'real', page: 1, limit: 10 }).catch(() => null),
-        api('/catalog', { channel: 'comic', page: 1, limit: 10 }).catch(() => null),
-        api('/catalog', { channel: 'ai', page: 1, limit: 10 }).catch(() => null),
+        api('/rank', { board: 'ranklist_hot_play_sc', limit: 6 }).catch(() => null),
+        api('/rank', { board: 'human_hot_play', content: 'human', limit: 10 }).catch(() => null),
+        api('/rank', { board: 'comic_series_hot_play', content: 'comic_series_rank', limit: 10 }).catch(() => null),
+        api('/rank', { board: 'ai_playlet_hot_play', content: 'ai_playlet', limit: 10 }).catch(() => null),
       ]);
       if (gen !== homeFeedGen) return;   // 期间切走了视图
       renderBanner(homeHero, toCards(rank && rank.items));
@@ -356,7 +357,9 @@
      这里只保留当前分类下的官方榜单行（推荐榜/热播榜/新剧榜…），不再重复分类切换。 */
   function renderRankBar(meta) {
     if (!rankBar) return;
-    const isRankView = home.view === 'hot' || home.view === 'series';
+    // 五个 tab 默认都是榜单数据源；选了筛选条件时走 catalog，隐藏榜单栏
+    const hasFilter = home.selections && Object.keys(home.selections).length > 0;
+    const isRankView = !!VIEW_RANK[home.view] && !hasFilter;
     if (!isRankView || !meta || !(meta.contents || []).length) {
       rankBar.hidden = true; rankBar.innerHTML = ''; return;
     }
@@ -436,6 +439,9 @@
     homeGen += 1;
     home.page = 0; home.loading = false; home.done = false; home.items = [];
     grid.innerHTML = ''; status.textContent = '';
+    // 取消全部筛选时回到该 tab 的官方热播榜，重置榜单状态与游标
+    const want = VIEW_RANK[home.view];
+    if (want) { rankUI.content = want.content; rankUI.board = want.board; rankUI.cursor = ''; }
     skeleton();
     loadHome();
   }
@@ -496,7 +502,11 @@
       let items = [];
       let more = false;
       let rankResult = null;
-      if (home.view === 'hot' || home.view === 'series') {
+      // 默认（无筛选）：五个 tab 都走各自分类的官方热播榜，显示全平台热度最高的剧。
+      // 只有用户在筛选面板选了条件，才切回 catalog 筛选流。
+      const hasFilter = home.selections && Object.keys(home.selections).length > 0;
+      const wantRank = VIEW_RANK[home.view] && !hasFilter;
+      if (wantRank) {
         // 官方榜单每页只有 10~12 条，用 SDK cursor 续页，不再拿 offset×30 硬切
         const params = { board: rankUI.board, limit: 30 };
         if (rankUI.content && rankUI.content !== 'all') params.content = rankUI.content;
@@ -507,9 +517,7 @@
         more = !!rankResult.has_more;
       } else {
         const params = { channel: home.view, page: home.page + 1 };
-        if (home.selections && Object.keys(home.selections).length) {
-          params.selections = JSON.stringify(home.selections);
-        }
+        if (hasFilter) params.selections = JSON.stringify(home.selections);
         const r = await api('/catalog', params);
         items = r.items || [];
         more = !!r.has_more;
@@ -520,6 +528,9 @@
         if (rankResult.contents && rankResult.contents.length) rankUI.meta = { contents: rankResult.contents };
         rankUI.cursor = String(rankResult.cursor || '');
         if (home.page === 0) renderRankBar(rankUI.meta);
+      } else if (rankBar && !rankBar.hidden) {
+        // 筛选模式下隐藏榜单切换栏，避免残留上一次的榜单 chips
+        rankBar.hidden = true; rankBar.innerHTML = ''; rankBar.onclick = null;
       }
       if (home.page === 0) {
         grid.innerHTML = '';
