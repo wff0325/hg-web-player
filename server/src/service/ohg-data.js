@@ -203,6 +203,16 @@ async function orderItems(raw, sel) {
   return hasOfficialSort(sel) ? enriched : sortByHeat(enriched);
 }
 
+/**
+ * 给分类列表补展示名次，前端据此显示 TOP1/TOP2 角标。
+ * 默认（无官方排序）已经按热度降序，名次即热度排名；选了官方排序则按展示顺序编号。
+ * rankOffset 用于翻页续号，让第 2 页从 31 开始而不是又从 1 开始。
+ */
+function withRank(items, rankOffset) {
+  const start = Number(rankOffset) > 0 ? Number(rankOffset) : 0;
+  return items.map((x, i) => Object.assign({}, x, { rank: start + i + 1 }));
+}
+
 /* ---------------- 搜索 / 发现 ---------------- */
 
 async function search(query, limit, filters) {
@@ -513,7 +523,7 @@ async function catalog(channel, pageNum, perPage, selections) {
   // 本体裁最热的剧；一旦用户选了官方排序则完全尊重 SDK 的顺序。
   if (size <= 18) {
     const r = await Ohg.shortFilter(q);
-    const finalItems = await orderItems(r.items || [], sel);
+    const finalItems = withRank(await orderItems(r.items || [], sel), 0);
     const names = { real: '真人剧', comic: 'AI漫剧', ai: 'AI短剧' };
     return { channel: ch, name: names[ch] || ch, page, total_pages: 999,
       has_more: r.has_more === true, items: finalItems.slice(0, size) };
@@ -528,7 +538,7 @@ async function catalog(channel, pageNum, perPage, selections) {
   const cursor = catalogCursors.get(keyPrefix + page);
   if (cursor) q.cursor = cursor;
   const r = await Ohg.shortFilter(q);
-  const finalItems = (await orderItems(r.items || [], sel)).slice(0, size);
+  const finalItems = withRank(await orderItems(r.items || [], sel), (page - 1) * size).slice(0, size);
   // 只缓存"下一页"入口；page=1 永远没有预置游标，重新进入必从第一页开始。
   if (r.cursor) catalogCursors.set(keyPrefix + (page + 1), r.cursor);
   const names = { real: '真人剧', comic: 'AI漫剧', ai: 'AI短剧' };
