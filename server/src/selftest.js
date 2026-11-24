@@ -19,6 +19,7 @@ const path = require('path');
 
 const Mp4 = require('./core/mp4');
 const PureSign = require('./core/pure-sign');
+const V5 = require('./core/v5-constants');
 const Safeguards = require('./core/safeguards');
 const Spade = require('./core/spade');
 const AppSource = require('./service/app-source');
@@ -957,23 +958,27 @@ function appSource() {
 
   const q = AppSource.PLAYBACK_QUERY;
   check('v5 query: aid=8662', q.aid === '8662', q.aid);
-  check('v5 query: version_name=7.4.3.32', q.version_name === '7.4.3.32', q.version_name);
-  check('v5 query: device_type=PGT-AN10', q.device_type === 'PGT-AN10', q.device_type);
-  check('v5 query: os_version=12', q.os_version === '12', q.os_version);
-  check('v5 query: channel=vivo_8662_64', q.channel === 'vivo_8662_64', q.channel);
+  check('v5 query: version_name=7.4.5.32', q.version_name === '7.4.5.32', q.version_name);
+  check('v5 query: device_type=25053RT47C', q.device_type === '25053RT47C', q.device_type);
+  check('v5 query: os_version=16', q.os_version === '16', q.os_version);
+  check('v5 query: channel=update_64', q.channel === 'update_64', q.channel);
   check('v5 query: 不带 ts（由签名器写 _rticket）', q.ts === undefined, String(q.ts));
-  check('v5 接口走 player/v1 路径（兜底）',
-    AppSource.VIDEO_API.endsWith('/multi_video_model/player/v1'), AppSource.VIDEO_API);
-  check('主取址走 GET video_tab 路径',
+  check('主取址走 preload/v1 路径',
+    AppSource.VIDEO_API.endsWith('/multi_video_model/preload/v1'), AppSource.VIDEO_API);
+  check('域名表包含 reading.snssdk.com 与 b/hl/lf',
+    AppSource.VIDEO_API_HOSTS.length === 4
+    && AppSource.VIDEO_API_HOSTS[0] === 'reading.snssdk.com'
+    && AppSource.VIDEO_API_HOSTS.includes('api5-normal-hl.fqnovel.com')
+    && AppSource.VIDEO_API_HOSTS.includes('api5-normal-lf.fqnovel.com'),
+    AppSource.VIDEO_API_HOSTS.join(','));
+  check('GET video_tab 保持兜底路径',
     AppSource.VIDEO_TAB_API.endsWith('/reading/bookapi/video_tab/multi_video_model/v1/'),
     AppSource.VIDEO_TAB_API);
-  check('GET 取址 UA 版本与设备注册一致（73932）',
-    AppSource.VIDEO_TAB_UA.indexOf('/73932') > 0, AppSource.VIDEO_TAB_UA);
-  check('GET 取址使用 video_tab 专用 UA（25053RT47C）',
+  check('GET 兜底 UA 使用 currentApp 机型（25053RT47C）',
     AppSource.VIDEO_TAB_UA.indexOf('25053RT47C') > 0, AppSource.VIDEO_TAB_UA);
-  check('备用取址域名为 b（0.16.13 兼容档重查）',
-    AppSource.VIDEO_API_HOST_ALT === 'api5-normal-sinfonlineb.fqnovel.com',
-    AppSource.VIDEO_API_HOST_ALT);
+  check('POST UA 使用 Android http.agent',
+    AppSource.VIDEO_UA.indexOf('Dalvik/2.1.0') === 0, AppSource.VIDEO_UA);
+  check('medusa 字段21=312', V5.FIELD21 === 312, V5.FIELD21);
   check('未启用官网低清兜底', AppSource.webPlayInfo === undefined, '已移除');
 
   // 选流：上游 quality_desc 与真实分辨率不一致时不能整集报错。

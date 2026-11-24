@@ -227,8 +227,8 @@ async function run(argv) {
 
   console.log('  vid          ' + target.vid
     + (target.title !== '' ? '（' + target.title + ' 第 ' + target.index + ' 集）' : ''));
-  console.log('  主接口       ' + AppSource.VIDEO_TAB_API);
-  console.log('  兜底接口     ' + AppSource.VIDEO_API);
+  console.log('  主接口       ' + AppSource.VIDEO_API + '（域名表 ' + AppSource.VIDEO_API_HOSTS.length + ' 个）');
+  console.log('  兜底接口     ' + AppSource.VIDEO_TAB_API);
   console.log('  清晰度       ' + quality);
   console.log('');
 
@@ -247,7 +247,8 @@ async function run(argv) {
   if (t.route) {
     note('实际取址：' + (t.route === 'video-tab'
       ? 'GET video_tab' + (t.tab ? '（' + t.tab.host + '，' + size(t.tab.bytes) + '）' : '')
-      : '签名 POST player/v1') + (t.tabError ? '；GET 失败：' + t.tabError : ''));
+      : '签名 POST preload/v1' + (t.postHost ? '（' + t.postHost + '）' : ''))
+      + (t.tabError ? '；GET 兜底失败：' + t.tabError : ''));
   }
 
   // ---- 1. 设备注册 ----

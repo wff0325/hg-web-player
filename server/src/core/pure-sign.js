@@ -956,7 +956,7 @@ function buildMedusaV5(url, body, khronos, identity) {
     [10, flags, 'bytes'], [12, khronos, 'sint'], [13, f13, 'bytes'],
     [14, sliceBytes(query, 0, 6), 'bytes'],
     [15, proto([[1, 1, 'sint'], [2, 1, 'sint'], [3, 1, 'sint'], [5, 1, 'sint']]), 'message'],
-    [17, khronos, 'sint'], [20, 'none'], [21, 377, 'sint'], [23, env, 'message'],
+    [17, khronos, 'sint'], [20, 'none'], [21, V5.FIELD21, 'sint'], [23, env, 'message'],
     [24, '{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,'
     + '"kd":0,"dyn":"","do":1,"tk":true}']]);
 

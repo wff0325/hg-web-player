@@ -27,23 +27,27 @@ const PlaybackDevice = require('./playback-device');
 /**
  * 播放取址接口（Android v5，v04.10.03 签名）。
  *
- * 2026-11-16 上游切换：旧的 multi_video_model/v1（v3 Medusa）对播放取址一律
- * 返回 200 空体，仅靠重新注册匿名设备无法恢复。当前可用链路是
- * multi_video_model/player/v1 + v5 Medusa/Helios/Khronos 签名，
- * 见 core/pure-sign.js 的 signPlaybackV5（上游参考 N3urda/hongguoTV 0.16.5）。
+ * 2026-11-24 上游切换：currentApp 7.4.5.32 使用
+ * multi_video_model/preload/v1 + v5 Medusa/Helios/Khronos 签名，
+ * 见 core/pure-sign.js 的 signPlaybackV5。
  */
-const VIDEO_API_HOST = 'api5-normal-sinfonlinea.fqnovel.com';
-/** 备用域名：上游 0.16.13 用同一身份在 b 域名重查当前集，拿可解码档位。 */
+const VIDEO_API_HOST = 'reading.snssdk.com';
+/** 同协议备用域名：b/hl/lf 与当前设备无关，按序尝试一次。 */
 const VIDEO_API_HOST_ALT = 'api5-normal-sinfonlineb.fqnovel.com';
-const VIDEO_API = 'https://' + VIDEO_API_HOST + '/novel/player/multi_video_model/player/v1';
+const VIDEO_API_HOSTS = [
+  VIDEO_API_HOST,
+  VIDEO_API_HOST_ALT,
+  'api5-normal-hl.fqnovel.com',
+  'api5-normal-lf.fqnovel.com',
+];
+const VIDEO_API_PATH = '/novel/player/multi_video_model/preload/v1';
+const VIDEO_API = 'https://' + VIDEO_API_HOST + VIDEO_API_PATH;
 
 /**
  * 官方 App 现行的单集取址：GET video_tab。
  *
- * 2026-11-21 实测：所有 POST 取址路径（player/v1、multi_video_model/v1，a/b 两域名）
- * 均返回 HTTP 200 空体，而这条 GET 在 a/b 两域名都正常返回完整 video_model_data。
- * 上游 N3urda/hongguoTV 0.16.11 同样把它作为主路径（ContentRepository.currentStream）。
- * POST 链路保留兜底，待上游恢复后仍可用。
+ * 2026-11-24：currentApp 主路径已迁到 preload/v1，video_tab 退为同身份兜底；
+ * 仅在 preload 全链路空响应时用当前注册身份重查本集，避免换设备烧注册配额。
  */
 const VIDEO_TAB_API = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/';
 
@@ -53,13 +57,21 @@ const VIDEO_TAB_API = 'https://api5-normal-sinfonlineb.fqnovel.com/reading/booka
 const VIDEO_TAB_QUERY = {
   aid: '8662',
   app_name: 'novelread',
-  version_code: '74332',
-  version_name: '7.4.3.32',
-  channel: 'vivo_8662_64',
+  version_code: '74532',
+  version_name: '7.4.5.32',
+  update_version_code: '74532',
+  manifest_version_code: '74532',
+  os: 'android',
+  ssmix: 'a',
+  channel: 'update_64',
   device_platform: 'android',
-  device_type: 'PGT-AN10',
-  os_version: '12',
-  update_version_code: '74332',
+  device_type: '25053RT47C',
+  device_brand: 'Redmi',
+  os_version: '16',
+  os_api: '36',
+  ac: 'wifi',
+  language: 'zh',
+  host_abi: 'arm64-v8a',
 };
 
 /** GET 取址的分集参数，顺序同样对齐 videoTabRequest()。 */
@@ -74,34 +86,22 @@ const VIDEO_TAB_EXTRA = {
   from_video_id: '',
 };
 
-/** GET 取址的 UA：上游 video_tab 专用 UA（与 POST 的 VIDEO_UA 不同）。 */
+/** GET 取址的 UA：官方 7.3.9.32 Cronet 形态，机型随 currentApp 档。 */
 const VIDEO_TAB_UA = 'com.phoenix.read/73932 (Linux; U; Android 16; zh_CN; 25053RT47C; '
   + 'Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 
-/** 播放请求 UA：必须与 query 里的版本/机型参数同源（7.4.3.32 / PGT-AN10 / Android 12）。 */
-const VIDEO_UA = 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; '
-  + 'Build/V417IR;tt-ok/3.12.13.20)';
+/** 播放请求 UA：currentApp 使用 Android http.agent，机型/Build 与 query 同源。 */
+const VIDEO_UA = 'Dalvik/2.1.0 (Linux; U; Android 16; 25053RT47C Build/BP2A.250605.031.A3)';
 
-const VERSION_NAME = '7.4.3.32';
+const VERSION_NAME = '7.4.5.32';
 
 /**
  * v5 播放接口的 query 参数。
  *
- * 与旧链路的区别：不带 ts（_rticket 由签名器抖动后写入），机型/系统版本换成
- * 注册客户端一致的一套（PGT-AN10 / Android 12 / vivo_8662_64）。
+ * 2026-11-24 currentApp 档：7.4.5.32 / update_64 / 25053RT47C / Android 16。
  * 键的插入序即编码序，保持与上游一致便于排查。
  */
-const PLAYBACK_QUERY = {
-  aid: '8662',
-  app_name: 'novelread',
-  version_code: '74332',
-  version_name: '7.4.3.32',
-  channel: 'vivo_8662_64',
-  device_platform: 'android',
-  device_type: 'PGT-AN10',
-  os_version: '12',
-  update_version_code: '74332',
-};
+const PLAYBACK_QUERY = Object.assign({}, VIDEO_TAB_QUERY);
 
 /** 请求域名白名单（他的 checkedUrl 域名表，防签名 body 被带往第三方）。 */
 const API_DOMAINS = ['fqnovel.com', 'snssdk.com'];
@@ -115,6 +115,14 @@ const URL_CONSTANTS = Crypto.unhex(
   + 'f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58');
 
 // ==================== 入口 ====================
+
+/**
+ * 2026-11-24 上游 currentApp 协议更新（legend0/hongguo-desktop de40ffa7 / hongguoTV main）：
+ *  - 7.4.3.32 / PGT-AN10 / player/v1 + device_level=1 已被风控空响应淘汰；
+ *  - 改为 7.4.5.32 / 25053RT47C / preload/v1 + device_level=2 + dr_scene=preload；
+ *  - x-medusa wire 字段 21 由 377 改为 312（377 会返回 200/0B）。
+ * 旧的 GET video_tab 保留为同身份兜底，但 UA/query 同步升到 currentApp 档。
+ */
 
 /**
  * 取某集的 App 直链。quality 为空 / best / auto 时按「H.264 优先、清晰度优先」
@@ -265,60 +273,45 @@ async function pickFastest(cands, trace) {
 async function loadModel(vid, trace) {
   const hasPlayable = (parsed) => parsed !== null
     && parsed.rows.length > 0 && !allBytevc2(parsed.rows);
-  let tabModel = null;
-  let tabError = null;
+  let lastErr = null;
+  let fallbackParsed = null;
+
+  // 2026-11-24 主链路：currentApp 7.4.5.32 preload/v1，按官方域名表顺序尝试。
+  for (const host of VIDEO_API_HOSTS) {
+    try {
+      const model = await loadModelPost(vid, trace, host);
+      const parsed = await rowsFromModel(model, trace);
+      if (parsed !== null && parsed.rows.length > 0) fallbackParsed = parsed;
+      if (hasPlayable(parsed)) return parsed;
+      lastErr = new Error('主接口未提供可播档位');
+    } catch (e) {
+      lastErr = e;
+      if (trace !== null && trace !== undefined) {
+        if (!Array.isArray(trace.hostErrors)) trace.hostErrors = {};
+        trace.hostErrors[host] = String((e && e.message) || e);
+      }
+    }
+  }
+
+  // 同身份兜底：preload 全链路空响应时，用当前注册身份重查 video_tab 本集。
   try {
-    tabModel = await fetchVideoTabModel(vid, trace);
+    const tabModel = await fetchVideoTabModel(vid, trace);
+    const parsed = await rowsFromModel(tabModel, trace);
+    if (parsed !== null && parsed.rows.length > 0) fallbackParsed = parsed;
+    if (hasPlayable(parsed)) return parsed;
+    lastErr = new Error('video_tab 兜底未提供可播档位');
   } catch (e) {
-    // GET 空包不能吞掉 POST 兜底机会
-    tabError = e;
+    lastErr = e;
     if (trace !== null && trace !== undefined) {
       trace.tabError = String((e && e.message) || e);
     }
   }
-
-  if (tabModel !== null) {
-    let tabParsed = null;
-    try {
-      tabParsed = await rowsFromModel(tabModel, trace);
-    } catch (e) {
-      tabError = e;
-      if (trace !== null && trace !== undefined) {
-        trace.tabRowsError = String((e && e.message) || e);
-      }
-    }
-    if (hasPlayable(tabParsed)) return tabParsed;
-
-    // 上游 0.16.13：tab 模型存在但只有 bytevc2（电视/浏览器不可解码）时，
-    // 复用同一身份在备用域名 b 重查 player/v1，拿 bytevc1/1080p 兼容档。
-    if (trace !== null && trace !== undefined) {
-      trace.tabNoCompatible = {
-        rows: tabParsed === null ? 0 : tabParsed.rows.length,
-        alternateHost: VIDEO_API_HOST_ALT,
-      };
-    }
-    try {
-      const altModel = await loadModelPost(vid, trace, VIDEO_API_HOST_ALT);
-      const altParsed = await rowsFromModel(altModel, trace);
-      if (hasPlayable(altParsed)) return altParsed;
-      if (tabParsed !== null) return tabParsed;
-      tabError = new Error('备用域名仍未提供可播档位');
-    } catch (e) {
-      if (trace !== null && trace !== undefined) {
-        trace.alternateModelError = String((e && e.message) || e);
-      }
-      if (tabParsed !== null) return tabParsed;
-      tabError = e;
-    }
-    throw tabError || new Error('App 接口未提供可播档位');
-  }
-
-  const model = await loadModelPost(vid, trace, VIDEO_API_HOST);
-  return rowsFromModel(model, trace);
+  if (fallbackParsed !== null) return fallbackParsed;
+  throw lastErr || new Error('App 接口未提供可播档位');
 }
 
 /**
- * GET video_tab 单集取址（当前可用主路径）。
+ * GET video_tab 单集取址（preload 全链路空响应时的同身份兜底）。
  * 签名与 POST 共用 v5，但 body 为 null（纯 GET），query 需带 video_id 等单集参数。
  * 返回的 video_model 是 JSON 字符串，video_list 是数组（与 POST 的对象形态不同）。
  */
@@ -578,12 +571,12 @@ async function listCandidates(vid) {
   return out;
 }
 
-/** 请求体（v5 播放器形态：多了 dr_scene，biz_param 增加 disable_video_relate_book）。 */
+/** 请求体（currentApp 7.4.5.32 preload 形态）。 */
 function payload(vid) {
   const biz = Json.obj();
   biz.detail_page_version = 0;
-  // 上游 0.16.13：level 3 可能只给 bytevc2，level 1 才会协商出电视/浏览器可解码档
-  biz.device_level = 1;
+  // 2026-11-24 currentApp：device_level 2 + dr_scene=preload
+  biz.device_level = 2;
   biz.disable_digg_stat = false;
   biz.disable_video_relate_book = false;
   biz.need_all_video_definition = true;
@@ -596,7 +589,7 @@ function payload(vid) {
   const out = Json.obj();
   out.biz_param = biz;
   out.mixed_video_id_map = mixed;
-  out.dr_scene = 'player';
+  out.dr_scene = 'preload';
   return out;
 }
 
@@ -605,14 +598,13 @@ function payload(vid) {
  * 播放取址请求：注册设备身份 + v5 签名（x-khronos / x-helios / x-medusa）+ gzip body。
  *
  * 与旧实现的区别（关键）：
- *  - 接口换成 multi_video_model/player/v1；
+ *  - 接口换成 multi_video_model/preload/v1（currentApp 7.4.5.32）；
  *  - 签名改用 v5（Android v04.10.03），只发三个签名头，v3 的 gorgon/argus/ladon 不再发送；
  *  - _rticket 由签名器抖动到「iv & 15 == 12」的分支后再签名；
  *  - 上游若仍返回空 data（身份被拒），换新设备身份重试一次。
  */
 async function postPlayback(body, trace, host) {
-  const api = 'https://' + (host || VIDEO_API_HOST)
-    + '/novel/player/multi_video_model/player/v1';
+  const api = 'https://' + (host || VIDEO_API_HOST) + VIDEO_API_PATH;
   const tReg = Date.now();
   let identity = await PlaybackDevice.getPlaybackDevice();
   if (trace !== null && trace !== undefined) {
@@ -1090,6 +1082,8 @@ module.exports = {
   VIDEO_API,
   VIDEO_API_HOST,
   VIDEO_API_HOST_ALT,
+  VIDEO_API_HOSTS,
+  VIDEO_API_PATH,
   VIDEO_TAB_API,
   VIDEO_UA,
   VIDEO_TAB_UA,

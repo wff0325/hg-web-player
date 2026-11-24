@@ -147,6 +147,7 @@
   const homeHero = $('homeHero'), homeSections = $('homeSections'), topicBar = $('topicBar');
   let homeFeedGen = 0;      // 首页增强区的代际，切 tab 时作废旧请求
   let bannerTimer = 0;      // Banner 自动轮播定时器
+  let seasonRowCleanup = null; // 全季横滑轨道的事件清理
 
   /* 把上游条目数组归一成统一结构（Banner / 横滑轨道用） */
   function toCards(items) {
@@ -735,6 +736,7 @@
     const sh = $('seasonsHead'); const sl = $('seasonList');
     if (sh) sh.hidden = true;
     if (sl) { sl.hidden = true; sl.innerHTML = ''; }   // 先清空全季，避免闪上一部
+    if (seasonRowCleanup) { seasonRowCleanup(); seasonRowCleanup = null; }
     detailPage.hidden = false;
     // 详情页自己是 fixed 全屏滚动容器，必须锁住 body，
     // 否则首页那条滚动条会留在最右边，出现两条滑轨（外侧那条还拖不动）
@@ -1231,6 +1233,73 @@
   }
 
   /**
+   * 全季横滑轨道：鼠标拖拽 + 左右箭头 + 边缘渐隐。
+   * 触屏继续走浏览器原生横向滚动，不抢纵向页面手势。
+   */
+  function enableSeasonRow(wrap) {
+    if (seasonRowCleanup) { seasonRowCleanup(); seasonRowCleanup = null; }
+    const row = wrap && wrap.querySelector('.season-hrow');
+    if (!row) return;
+    const left = wrap.querySelector('.season-arrow.left');
+    const right = wrap.querySelector('.season-arrow.right');
+    const ac = new AbortController();
+    let dragging = false, moved = false, startX = 0, startLeft = 0, suppressUntil = 0;
+
+    const measure = () => {
+      const max = Math.max(0, row.scrollWidth - row.clientWidth);
+      wrap.classList.toggle('can-l', row.scrollLeft > 2);
+      wrap.classList.toggle('can-r', row.scrollLeft < max - 2);
+    };
+    const onDown = (e) => {
+      if (e.button !== 0) return;
+      dragging = true; moved = false;
+      startX = e.clientX; startLeft = row.scrollLeft;
+    };
+    const onMove = (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      if (!moved) {
+        if (Math.abs(dx) < 5) return;
+        moved = true;
+        row.classList.add('dragging');
+        row.style.scrollSnapType = 'none';
+      }
+      row.scrollLeft = startLeft - dx;
+      e.preventDefault();
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      if (moved) suppressUntil = performance.now() + 200;
+      dragging = false; moved = false;
+      row.classList.remove('dragging');
+      row.style.scrollSnapType = '';
+      measure();
+    };
+    row.addEventListener('scroll', measure, { passive: true, signal: ac.signal });
+    row.addEventListener('mousedown', onDown, { signal: ac.signal });
+    row.addEventListener('click', (e) => {
+      if (performance.now() >= suppressUntil) return;
+      e.preventDefault(); e.stopPropagation();
+    }, true, { signal: ac.signal });
+    window.addEventListener('mousemove', onMove, { signal: ac.signal });
+    window.addEventListener('mouseup', onUp, { signal: ac.signal });
+    window.addEventListener('blur', onUp, { signal: ac.signal });
+    const nudge = (dir) => row.scrollBy({
+      left: dir * Math.max(140, row.clientWidth * 0.8), behavior: 'smooth'
+    });
+    if (left) left.addEventListener('click', () => nudge(-1), { signal: ac.signal });
+    if (right) right.addEventListener('click', () => nudge(1), { signal: ac.signal });
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(measure);
+      ro.observe(row);
+      Array.from(row.children).forEach((c) => ro.observe(c));
+    }
+    measure();
+    seasonRowCleanup = () => { ac.abort(); if (ro) ro.disconnect(); };
+  }
+
+  /**
    * 从官方「相关作品」里挑下一季。
    * 严格判定（移植自 hongguoTV RelatedWorks.nextSeason）：
    *  - 季号 = 当前季号 + 1（season_index 优先，其次标题里的季号）
@@ -1293,7 +1362,7 @@
     const curStyle = seasonStyle(meta.title || '');
     rows.push({
       id: String(sid), title: meta.title || '', cover: meta.cover || '',
-      season_index: cur.num, upcoming: false, now: true,
+      season_index: cur.num, season: '', upcoming: false, now: true,
       episodes: (detail.episodes || []).length,
     });
     seenIds.add(String(sid));
@@ -1307,7 +1376,7 @@
       const idx = Number(it.season_index) > 0 ? Number(it.season_index) : (ps ? ps.num : 0);
       rows.push({
         id: String(it.series_id), title: it.title, cover: it.cover || '',
-        season_index: idx, upcoming: !!it.upcoming, now: false,
+        season_index: idx, season: it.season || '', upcoming: !!it.upcoming, now: false,
         episodes: it.episode_cnt || 0,
       });
     }
@@ -1332,15 +1401,32 @@
       head.classList.toggle('collapsed', next);
       try { store.set('mr.seasonsCollapsed', next); } catch (e) { /* 忽略 */ }
     };
+    if (seasonRowCleanup) { seasonRowCleanup(); seasonRowCleanup = null; }
+    list.innerHTML = '';
+    const wrap = el('div', 'season-hrow-wrap');
+    const row = el('div', 'season-hrow');
+    wrap.appendChild(row);
+    wrap.appendChild(el('button', 'season-arrow left', '‹'));
+    wrap.appendChild(el('button', 'season-arrow right', '›'));
+    list.appendChild(wrap);
+
     rows.forEach((r) => {
       const node = el('div', 'season-item' + (r.now ? ' now' : ''));
       const coverHtml = r.cover
         ? `<img class="si-cover" loading="lazy" src="${esc(r.cover)}" alt="">`
         : '<div class="si-cover-ph">📺</div>';
-      const label = r.season_index > 0 ? `第${r.season_index}季` : '季';
+      const label = /季/.test(String(r.season || '')) ? String(r.season)
+        : (r.season_index > 0 ? `第${r.season_index}季` : '季');
       const sub = r.now ? '正在看'
         : (r.upcoming ? '待上线' : label + (r.episodes ? ' · ' + r.episodes + '集' : ''));
-      node.innerHTML = `${coverHtml}<div class="si-t">${esc(r.title)}</div><div class="si-m">${sub}</div>`;
+      node.title = r.now ? '当前观看的这一季' : r.title;
+      node.innerHTML = `
+        <div class="season-cover">
+          ${coverHtml}
+          <span class="badge season">${esc(label)}</span>
+        </div>
+        <div class="si-t">${esc(r.title)}</div>
+        <div class="si-m">${sub}</div>`;
       if (!r.now) {
         node.addEventListener('click', () => {
           hideNextSeason();
@@ -1348,8 +1434,9 @@
           openDetail(r.id, { id: r.id, title: r.title, cover: r.cover }).then(() => playEpisode(1));
         });
       }
-      list.appendChild(node);
+      row.appendChild(node);
     });
+    enableSeasonRow(wrap);
   }
 
   function lookupNextSeason(force) {

@@ -391,40 +391,75 @@ body.hero-bg-view .topic-chip.active {
 .section-head { display: flex; align-items: baseline; justify-content: space-between; padding: 20px 16px 10px; }
 .section-head h2 { margin: 0; font-size: 15px; }
 .muted { color: var(--muted); font-size: 12.5px; }
-/* 全季：横向滚动的季卡片，点击切到该季。多个同季版本都列出来，让用户自己选。 */
-/* hidden 会被下面的 display:flex 覆盖，必须显式处理，否则折叠/隐藏失效 */
+/* 全季：官方 related 数据 + 严格过滤；卡片借鉴 hongguo-desktop 的展示方式。 */
+/* hidden 必须显式处理，避免被 flex/block 规则覆盖导致折叠失效 */
 #seasonsHead[hidden], #seasonList[hidden] { display: none !important; }
-/* 折叠头：点标题展开/收起 */
+/* 折叠头：点标题展开/收起，保留用户上次状态 */
 .seasons-head { cursor: pointer; user-select: none; }
 .seasons-head h2 { display: flex; align-items: baseline; gap: 6px; }
 .seasons-head .sh-arrow { color: var(--muted); align-self: center; transition: transform .2s; }
 .seasons-head.collapsed .sh-arrow { transform: rotate(-90deg); }
-.season-list {
-  display: flex; gap: 10px; padding: 0 16px 6px;
+
+.season-list { padding-bottom: 6px; }
+.season-hrow-wrap { position: relative; --season-fade: 34px; }
+.season-hrow {
+  display: flex; gap: 10px; padding: 2px 16px 4px;
   overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  scroll-snap-type: x proximity; cursor: grab;
 }
-.season-list::-webkit-scrollbar { display: none; }
+.season-hrow::-webkit-scrollbar { display: none; }
+.season-hrow.dragging { cursor: grabbing; scroll-snap-type: none; }
+.season-hrow.dragging .season-item { pointer-events: none; }
+.season-hrow-wrap.can-l .season-hrow {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--season-fade));
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--season-fade));
+}
+.season-hrow-wrap.can-r .season-hrow {
+  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 var(--season-fade));
+  mask-image: linear-gradient(to left, transparent 0, #000 var(--season-fade));
+}
+.season-hrow-wrap.can-l.can-r .season-hrow {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--season-fade), #000 calc(100% - var(--season-fade)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--season-fade), #000 calc(100% - var(--season-fade)), transparent 100%);
+}
+.season-arrow {
+  position: absolute; top: 26px; bottom: 40px; z-index: 2;
+  width: 30px; border: 0; border-radius: 10px; padding: 0;
+  background: rgba(0,0,0,.34); color: #fff; font-size: 22px; line-height: 1;
+  backdrop-filter: blur(4px); opacity: 0; pointer-events: none; transition: opacity .15s;
+}
+.season-arrow:hover { background: rgba(0,0,0,.55); }
+.season-arrow.left { left: 8px; }
+.season-arrow.right { right: 8px; }
+.season-hrow-wrap.can-l .season-arrow.left,
+.season-hrow-wrap.can-r .season-arrow.right { opacity: 1; pointer-events: auto; }
 .season-list .season-item {
-  flex: 0 0 auto; width: 112px; padding: 7px; border-radius: 12px;
-  background: var(--bg-soft); cursor: pointer; transition: background .15s;
+  flex: 0 0 auto; width: 120px; scroll-snap-align: start; cursor: pointer;
 }
-.season-list .season-item:active { background: var(--active); }
-.season-list .season-item.now { box-shadow: inset 0 0 0 2px var(--accent); }
+.season-list .season-item.now { cursor: default; opacity: .45; }
+.season-list .season-item .season-cover {
+  position: relative; width: 100%; aspect-ratio: 3/4; border-radius: 10px;
+  overflow: hidden; background: var(--bg-soft);
+}
 .season-list .season-item .si-cover {
-  width: 100%; aspect-ratio: 3/4; border-radius: 8px; object-fit: cover;
-  background: #20202a; display: block;
+  width: 100%; height: 100%; object-fit: cover; display: block;
 }
 .season-list .season-item .si-cover-ph {
-  width: 100%; aspect-ratio: 3/4; border-radius: 8px; background: var(--accent-soft);
+  width: 100%; height: 100%; background: var(--accent-soft);
   display: flex; align-items: center; justify-content: center; font-size: 22px;
 }
+.season-list .season-item .badge.season {
+  position: absolute; left: 6px; top: 6px; z-index: 1;
+  padding: 3px 7px; border-radius: 8px; font-size: 11px; font-weight: 700;
+  color: #fff; background: linear-gradient(135deg, rgba(255,77,109,.72), rgba(255,122,69,.72));
+  backdrop-filter: blur(4px); text-shadow: 0 1px 3px rgba(0,0,0,.45);
+}
 .season-list .season-item .si-t {
-  margin-top: 6px; font-size: 12px; font-weight: 600; line-height: 1.3;
+  margin-top: 6px; font-size: 12.5px; font-weight: 600; line-height: 1.3;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .season-list .season-item .si-m { margin-top: 3px; font-size: 11px; color: var(--muted); }
 .season-list .season-item.now .si-m { color: var(--accent); }
-html[data-theme="light"] .season-list .season-item { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
 
 .ep-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 0 16px; }
 @media (min-width: 640px) { .ep-grid { grid-template-columns: repeat(10, 1fr); } }
@@ -756,7 +791,8 @@ main { max-width: 1440px; margin: 0 auto; position: relative; }
 @media (min-width: 520px) and (max-width: 1023px) {
   main { padding: 0 20px; }
   .detail-hero { padding-left: 28px; padding-right: 28px; }
-  .intro, .section-head, .ep-grid, .season-list { padding-left: 28px; padding-right: 28px; }
+  .intro, .section-head, .ep-grid { padding-left: 28px; padding-right: 28px; }
+  .season-hrow { padding-left: 28px; padding-right: 28px; }
   .ep-grid { grid-template-columns: repeat(8, 1fr); }
   .detail-hero .hero-inner img { width: 132px; }
   .hero-meta h1 { font-size: 22px; }
@@ -785,7 +821,8 @@ main { max-width: 1440px; margin: 0 auto; position: relative; }
   .brand-mark { width: 22px; height: 22px; }
   .detail-hero { padding-left: 14px; padding-right: 14px; }
   .intro { margin-left: 14px; margin-right: 14px; }
-  .section-head, .ep-grid, .season-list { padding-left: 14px; padding-right: 14px; }
+  .section-head, .ep-grid { padding-left: 14px; padding-right: 14px; }
+  .season-hrow { padding-left: 14px; padding-right: 14px; }
 }
 
 /* ==================== 搜索联想 / 搜索历史 ==================== */

@@ -16,6 +16,12 @@ const MAGIC16 = Crypto.unhex('2d4b4fca49750d433fb5ae2c226dcc56');
 /** x-medusa 字段 6 的 license 号。 */
 const LICENSE = '646637794';
 
+/**
+ * medusa wire 字段 21。2026-11-24 currentApp 7.4.5.32 抓包为 312；
+ * 旧值 377 会让 preload/v1 返回 HTTP 200 + 0 字节。
+ */
+const FIELD21 = 312;
+
 /** medusa keyHash 使用的 32 字节协议密钥。 */
 const SIGN_KEY = Crypto.unhex('b23c2a470a20d105dc3f8c4438f8272ed46d6c89ffdcdedd5108698d26e9489d');
 
@@ -44,4 +50,4 @@ const SBOX = Crypto.unhex(
   '1335ae0e178f3409a7803db83892dde5b9b7f0c750e24aef077badd678a09b850b84ec1597e4963cb5e675df1c0d6fb6' +
   '18496ecd76c35c798325590c2fb27a5e');
 
-module.exports = { MAGIC16, LICENSE, SIGN_KEY, SBOX };
+module.exports = { MAGIC16, LICENSE, FIELD21, SIGN_KEY, SBOX };
