@@ -16,7 +16,7 @@
   } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
 })();
 </script>
-<link rel="stylesheet" href="assets/app.css?v=20261124g">
+<link rel="stylesheet" href="assets/app.css?v=20261124h">
 </head>
 <body>
 
@@ -106,6 +106,10 @@
     <span class="muted" id="epCount"></span>
   </div>
   <div class="ep-grid" id="epGrid"></div>
+  <div class="section-head recommend-head" id="recommendHead" hidden>
+    <h2 id="recommendTitle">相关推荐</h2>
+  </div>
+  <div class="recommend-grid" id="recommendGrid" hidden></div>
 </section>
 
 <!-- 播放器 -->
@@ -237,6 +241,6 @@ window.MR_DO_UPDATE = function (cb) {
     .catch(function (e) { if (cb) cb(false, 'network'); });
 };
 </script>
-<script src="assets/app.js?v=20261124g"></script>
+<script src="assets/app.js?v=20261124h"></script>
 </body>
 </html>

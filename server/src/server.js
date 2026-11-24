@@ -23,6 +23,8 @@ const Download = require('./service/download');
 const Res = require('./service/res');
 const Stream = require('./service/stream');
 const Danmaku = require('./service/danmaku');
+const OhgData = require('./service/ohg-data');
+const Ohg = require('./service/ohg');
 const WebSync = require('./service/web-sync');
 const Http = require('./util/http');
 const Json = require('./util/json');
@@ -407,7 +409,72 @@ class Server {
 
   // ==================== 路由分发 ====================
 
+  /** openhongguo SDK 新能力路由（/sdk/*）。返回 true 表示已处理。 */
+  async sdkRoute(req, res, method, pathname, q) {
+    if (!pathname.startsWith('/sdk/')) return false;
+    const sub = pathname.slice('/sdk/'.length);
+    const int = (v, def) => {
+      const n = Number.parseInt(v, 10);
+      return Number.isFinite(n) ? n : def;
+    };
+    try {
+      let data;
+      switch (sub) {
+        case 'suggest':
+          data = { items: await OhgData.suggest(q.q !== undefined ? q.q : '') }; break;
+        case 'hot':
+          data = await OhgData.hotSearch(); break;
+        case 'cues':
+          data = { items: await OhgData.searchCues() }; break;
+        case 'discover':
+          data = await OhgData.discover(int(q.limit, 30)); break;
+        case 'new-releases':
+          data = await OhgData.newReleases(q.date ? { date: q.date } : {}); break;
+        case 'album':
+          data = await OhgData.album(String(q.album_id || q.id || '')); break;
+        case 'recommend':
+          data = await OhgData.recommend(String(q.series_id || q.id || '')); break;
+        case 'rank-groups':
+          data = await OhgData.rankGroups(); break;
+        case 'rank-rows':
+          data = await OhgData.rankRows(String(q.cell_id || q.id || ''), int(q.offset, 0), int(q.limit, 30)); break;
+        case 'ranking':
+          data = await OhgData.ranking(String(q.activity_id || ''), String(q.rank_list_id || q.list || ''), int(q.limit, 30)); break;
+        case 'categories':
+          data = await OhgData.categories(String(q.category_id || q.id || '')); break;
+        case 'category-landing': {
+          const opts = {};
+          if (q.tab !== undefined) opts.tab = String(q.tab);
+          if (q.cursor !== undefined) opts.cursor = String(q.cursor);
+          data = await OhgData.categoryLanding(String(q.category_id || q.id || ''), opts, int(q.limit, 30));
+          break;
+        }
+        case 'person':
+          data = await OhgData.person(String(q.user_id || q.id || '')); break;
+        case 'person-works':
+          data = await OhgData.personWorks(String(q.user_id || q.id || ''), q.cursor || '', int(q.limit, 30)); break;
+        case 'filter-panel':
+          data = await OhgData.filterPanel(String(q.genre || 'short_play')); break;
+        case 'reset-device':
+          await Ohg.resetDevice();
+          data = { ok: true, note: '已更换匿名设备' }; break;
+        default:
+          Res.fail(req, res, 404, '未知的 SDK 接口：' + sub);
+          return true;
+      }
+      Res.json(req, res, 200, data);
+    } catch (e) {
+      const ne = Ohg.normalizeError(e);
+      Res.fail(req, res, ne.code === 'CONTENT_UNAVAILABLE' ? 404 : 502,
+        ne.code + ': ' + ne.message);
+    }
+    return true;
+  }
+
   async route(req, res, method, pathname, q) {
+    // ---- openhongguo SDK 新能力（/sdk/*） ----
+    if (await this.sdkRoute(req, res, method, pathname, q)) return;
+
     // ---- 无需鉴权的基础接口 ----
     if (method === 'GET' && pathname === '/') {
       const m = Json.obj();
@@ -515,15 +582,14 @@ class Server {
       const searchOff = Number.parseInt(q.offset !== undefined ? q.offset : '0', 10);
       const searchLimit = (lim === null || lim === undefined || lim === '')
         ? 0 : Number.parseInt(lim, 10);
+      // 数据源：openhongguo SDK。前端契约不变（query/count/results/has_more/next_offset）。
       const m = Json.obj();
-      m.query = query;
-      // 首屏与续页走同一套逻辑，避免首屏拿不到 has_more 时前端只能乐观假设
-      // 「还有更多」，结果总数不足一页时要多点一次才知道到底。
-      const pg = await Client.searchPage(query, searchLimit, searchOff);
-      m.count = pg.items.length;
-      m.results = pg.items;
-      m.has_more = pg.hasMore;
-      m.next_offset = pg.nextSkip;
+      const pg = await OhgData.search(query, searchLimit || 40, []);
+      m.query = pg.query;
+      m.count = pg.count;
+      m.results = pg.results;
+      m.has_more = pg.has_more;
+      m.next_offset = searchOff + pg.next_offset;
       Res.json(req, res, 200, m);
       return;
     }
@@ -531,23 +597,15 @@ class Server {
     if (method === 'GET' && pathname === '/rank') {
       const board = q.board !== undefined ? q.board : 'recommend';
       const limit = Number.parseInt(q.limit !== undefined ? q.limit : '30', 10);
-      if (!Object.prototype.hasOwnProperty.call(Client.RANK_BOARDS, board)) {
-        Res.fail(req, res, 400, 'board 必须是 ' + Object.keys(Client.RANK_BOARDS).join('|'));
-        return;
-      }
-      // offset>0 走分页路径（供无限滚动）；缺省保持原行为，首屏不受影响
       const offset = Number.parseInt(q.offset !== undefined ? q.offset : '0', 10);
+      // 数据源：openhongguo SDK shortRank。前端契约不变。
+      const pg = await OhgData.rank(board, limit, offset);
       const m = Json.obj();
-      m.board = board;
-      m.name = Client.RANK_NAMES[board];
-      if (offset > 0) {
-        const pg = await Client.rankPage(board, limit, offset);
-        m.items = pg.items;
-        m.has_more = pg.hasMore;
-        m.next_offset = pg.nextOffset;
-      } else {
-        m.items = await Client.rank(board, limit);
-      }
+      m.board = pg.board;
+      m.name = pg.name;
+      m.items = pg.items;
+      m.has_more = pg.has_more;
+      m.next_offset = pg.next_offset;
       Res.json(req, res, 200, m);
       return;
     }
@@ -610,18 +668,19 @@ class Server {
     }
 
     if (method === 'GET' && pathname === '/catalog') {
-      // 官网 SSR 分类：channel=real|comic|ai|animation，page 从 1 开始
+      // 数据源：openhongguo SDK shortFilter。channel=real|comic|ai，page 从 1 开始。
       const channel = q.channel !== undefined && q.channel !== '' ? q.channel : 'real';
       const page = Number.parseInt(q.page !== undefined ? q.page : '1', 10) || 1;
-      const data = await Ssr.catalog(channel, page);
+      const data = await OhgData.catalog(channel, page, 30);
       Res.json(req, res, 200, data);
       return;
     }
 
     if (method === 'GET' && pathname === '/detail') {
-      // 官网 SSR 详情（含完整分集 vid 列表），作为 /episodes 的稳定来源
+      // 数据源：openhongguo SDK。返回 {meta, episodes} 契约不变。
       const seriesId = q.series_id !== undefined ? q.series_id : '';
-      const data = await Ssr.detail(seriesId);
+      if (seriesId === '') { Res.fail(req, res, 400, '缺少 series_id'); return; }
+      const data = await OhgData.detail(seriesId);
       Res.json(req, res, 200, data);
       return;
     }
@@ -640,11 +699,12 @@ class Server {
         Res.fail(req, res, 400, 'genre 必须是 ' + Object.keys(Client.GENRES).join('|'));
         return;
       }
-      const rows = await Client.filters(genre);
+      // 数据源：openhongguo SDK shortFilterPanel。契约不变（genre/name/rows）。
+      const r = await OhgData.filterPanel(genre);
       const m = Json.obj();
-      m.genre = genre;
-      m.name = Client.GENRE_NAMES[genre];
-      m.rows = rows;
+      m.genre = r.genre;
+      m.name = Client.GENRE_NAMES[genre] || r.name;
+      m.rows = r.rows;
       Res.json(req, res, 200, m);
       return;
     }
@@ -703,7 +763,8 @@ class Server {
         Res.fail(req, res, 400, '缺少 series_id');
         return;
       }
-      Res.json(req, res, 200, await Client.getEpisodes(sid));
+      const limit = Number.parseInt(q.limit !== undefined ? q.limit : '0', 10) || 0;
+      Res.json(req, res, 200, await OhgData.episodes(sid, limit));
       return;
     }
 
@@ -716,15 +777,18 @@ class Server {
         Res.fail(req, res, 400, '缺少 series_id');
         return;
       }
-      const force = String(q.refresh || '') === '1';
+      // 数据源：openhongguo SDK seasons()（官方权威全季，返回什么季就全收）。
       const m = Json.obj();
       try {
+        const r = await OhgData.seasons(sid);
         m.ok = true;
-        m.series_id = String(sid);
-        m.items = await Client.relatedWorks(sid, force);
+        m.series_id = r.series_id;
+        m.album_id = r.album_id;
+        m.season_count = r.season_count;
+        m.items = r.items;
       } catch (e) {
         m.ok = false;
-        m.error = e.message || '相关作品接口不可用';
+        m.error = (e && e.message) || '查全季接口不可用';
         m.items = [];
       }
       Res.json(req, res, 200, m);
@@ -741,12 +805,9 @@ class Server {
         return;
       }
       const limit = Number(q.limit);
-      const r = await Danmaku.fetchDanmaku({
-        seriesId: sid,
-        vid,
-        limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, Danmaku.MAX_ITEMS) : undefined,
-        fresh: q.fresh === '1' || q.fresh === 'true',
-      });
+      // 数据源：openhongguo SDK listDanmaku（官方时间轴弹幕）。契约不变。
+      const r = await OhgData.danmaku(sid, vid,
+        Number.isInteger(limit) && limit > 0 ? limit : 1200);
       Res.json(req, res, 200, r);
       return;
     }
@@ -772,16 +833,12 @@ class Server {
         Res.fail(req, res, 400, 'series_ids 最多 200 个');
         return;
       }
-      const r = await Client.getEpisodesBatch(filtered, Json.optInt(payload.batch_size, 20));
-      const items = r[0];
-      const rows = [];
-      for (const sid of filtered) {
-        if (Object.prototype.hasOwnProperty.call(items, sid)) rows.push(items[sid]);
-      }
+      // 数据源：openhongguo SDK getSeriesBatch（按请求顺序返回）。契约不变。
+      const r = await OhgData.batch(filtered);
       const m = Json.obj();
-      m.count = rows.length;
-      m.items = rows;
-      m.failed = r[1];
+      m.count = r.count;
+      m.items = r.items;
+      m.failed = filtered.length - r.count;
       Res.json(req, res, 200, m);
       return;
     }
@@ -792,7 +849,8 @@ class Server {
         Res.fail(req, res, 400, '缺少 series_id');
         return;
       }
-      const meta = await Client.getEpisodes(sid);
+      // 数据源：openhongguo SDK（与 /episodes 一致）。
+      const meta = await OhgData.episodes(sid, 0);
       const eps = Json.optArr(meta.episodes);
       const want = parseRange(q.ep !== undefined ? q.ep : 'all', eps.length);
 
@@ -1141,7 +1199,20 @@ class Server {
     }
 
     const quality = q.quality !== undefined ? q.quality : 'best';
-    const file = await Stream.ensureDecrypted(vid, quality);
+    let file;
+    // 播放数据源：openhongguo SDK 优先（前端 /episodes 返回的 vid 即 SDK episodeId）。
+    // SDK 取址失败时回落旧 App 协议，保证存量链接仍可播。
+    if (q.source !== 'app') {
+      try {
+        file = await Stream.ensureDecrypted(vid, quality, undefined, 'sdk');
+      } catch (e) {
+        Log.warn('SDK 播放失败（' + vid + '），回落 App 链路：'
+          + (e && e.message ? e.message : e));
+        file = await Stream.ensureDecrypted(vid, quality);
+      }
+    } else {
+      file = await Stream.ensureDecrypted(vid, quality);
+    }
     if (filename === null) filename = vid + '.mp4';
     await Res.streamFile(req, res, file, vid, filename);
   }
@@ -1158,7 +1229,12 @@ async function urlInfo(vid) {
   const info = Json.obj();
   if (vid === null || vid === undefined || vid === '') return info;
   try {
-    const t = await Stream.videoTrack(vid, 'best');
+    let t;
+    try {
+      t = await Stream.sdkTrack(vid, 'best'); // SDK 优先
+    } catch (sdkErr) {
+      t = await Stream.videoTrack(vid, 'best'); // 回落 App 协议
+    }
     if (t === null || t === undefined || t.url === null || t.url === undefined || t.url === '') {
       return info;
     }

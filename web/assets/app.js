@@ -574,6 +574,27 @@
   /* ---------------- 搜索 ---------------- */
   const searchPage = $('searchPage'), searchGrid = $('searchGrid'), searchStatus = $('searchStatus');
   const HOT_WORDS = ['总裁', '重生', '战神', '穿越', '复仇', '萌宝', '甜宠', '逆袭'];
+
+  /* openhongguo SDK 搜索增强：真实热搜/联想/提示词。接口失败时静默回退到本地默认。 */
+  async function loadHotWords() {
+    const box = $('hotWords');
+    if (!box || box.dataset.live) return;
+    box.dataset.live = '1';
+    try {
+      const r = await api('/sdk/hot', {});
+      const words = (r && r.guesses) || [];
+      const boardWords = (r && r.boards && r.boards[0] && r.boards[0].items) || [];
+      const merged = [...new Set([...words, ...boardWords])].slice(0, 20);
+      if (!merged.length) return;
+      box.innerHTML = '';
+      merged.forEach((w) => {
+        const b = el('button', 'word', w);
+        b.addEventListener('click', () => { $('searchInput').value = w; doSearch(); });
+        box.appendChild(b);
+      });
+      box.dataset.init = '1';
+    } catch (e) { /* 保留本地默认热词 */ }
+  }
   const SEARCH_HIST_KEY = 'mr.searches';
 
   function getSearchHist() {
@@ -650,11 +671,46 @@
     box.hidden = false;
   }
 
+  /** SDK 联想词是纯文本，点选后直接按该词搜索（不是打开详情）。 */
+  function renderTextSuggest(words) {
+    const box = $('suggestList');
+    box.innerHTML = '';
+    words.slice(0, 10).forEach((w) => {
+      const text = String(w || '').trim();
+      if (!text) return;
+      const row = el('button', 'sg-row');
+      row.innerHTML = '<span class="sg-ph-text"></span>'
+        + `<span class="sg-info"><span class="sg-name">${esc(text)}</span></span>`
+        + '<span class="sg-go">›</span>';
+      row.addEventListener('mousedown', (e) => e.preventDefault());
+      row.addEventListener('click', () => {
+        hideSuggest();
+        $('searchInput').value = text;
+        pushSearchHist(text);
+        renderSearchHist();
+        doSearch();
+      });
+      box.appendChild(row);
+    });
+    box.hidden = false;
+  }
+
   async function fetchSuggest(q) {
     const seq = ++suggestSeq;
     if (suggestAbort) { try { suggestAbort.abort(); } catch (e) { /* ignore */ } }
     suggestAbort = new AbortController();
     try {
+      // SDK 联想词优先：纯文本，点选后按词搜索
+      let words = [];
+      try {
+        const r = await api('/sdk/suggest', { q });
+        if (seq !== suggestSeq) return;
+        words = (r && r.items) || [];
+      } catch (e) { /* 回落 /search */ }
+      if (words.length) {
+        renderTextSuggest(words);
+        return;
+      }
       const qs = new URLSearchParams({ q, limit: 8, api_key: KEY });
       if (SHARE) qs.set('sharecode', SHARE);
       const res = await fetch(`${API}/search?${qs.toString()}`, { signal: suggestAbort.signal });
@@ -690,6 +746,7 @@
       });
       hw.dataset.init = '1';
     }
+    loadHotWords(); // 异步替换为 SDK 真实热搜（失败则用本地默认）
     hideSuggest();
     $('searchInput').value = '';
     renderSearchHist();
@@ -746,6 +803,11 @@
     $('detailIntro').textContent = seed ? seed.intro : '';
     $('epGrid').innerHTML = '';
     $('epCount').textContent = '';
+    // 相关推荐：切剧先清空，避免闪上一部的推荐
+    recommendToken += 1;
+    const rh = $('recommendHead'); const rg = $('recommendGrid');
+    if (rh) rh.hidden = true;
+    if (rg) { rg.hidden = true; rg.innerHTML = ''; }
 
     try {
       let r;
@@ -783,9 +845,30 @@
       const likely = detail.episodes.find((ep) => ep.index === (resumeIdx || 1))
         || detail.episodes[0];
       if (likely) prewarm(likely.vid, play.quality);
+      loadRecommend(seriesId);
     } catch (e) {
       $('detailIntro').textContent = '加载失败：' + (e.message || '');
     }
+  }
+
+  let recommendToken = 0;
+
+  /** 相关推荐：openhongguo SDK seriesRecommend，失败则不显示（不影响详情主体）。 */
+  async function loadRecommend(seriesId) {
+    const head = $('recommendHead'); const box = $('recommendGrid');
+    if (!head || !box) return;
+    const token = ++recommendToken;
+    try {
+      const r = await api('/sdk/recommend', { series_id: seriesId });
+      if (token !== recommendToken || detail.seriesId !== seriesId) return;
+      const items = (r && r.items) || [];
+      if (!items.length) return;
+      if (r.title) $('recommendTitle').textContent = r.title;
+      box.innerHTML = '';
+      items.slice(0, 12).forEach((it) => box.appendChild(card(it)));
+      head.hidden = false;
+      box.hidden = false;
+    } catch (e) { /* 推荐非核心，失败静默 */ }
   }
 
   function renderEpisodes() {

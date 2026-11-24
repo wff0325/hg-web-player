@@ -26,6 +26,7 @@ const Log = require('../util/log');
 const Http = require('../util/http');
 const Safeguards = require('../core/safeguards');
 const AppSource = require('../service/app-source');
+const Ohg = require('../service/ohg');
 
 /** 默认保留的缓存文件数上限。 */
 const CACHE_MAX_FILES = 30;
@@ -56,6 +57,60 @@ async function videoTrack(vid, quality, priority) {
   // 现在只有 v5（Android v04.10.03 签名）能拿到 video_model。
   // 拿不到时返回 null，由 ensureDecrypted 报「无直链 / video_model」。
   return AppSource.fetch(String(vid), quality, priority);
+}
+
+/** 清晰度偏好转短边像素：'1080p'->1080，数值->数值，'auto'/空->0（取最高）。 */
+function qualityToShort(quality) {
+  if (quality === null || quality === undefined || quality === '' || quality === 'auto') return 0;
+  const m = /(\d{3,4})/i.exec(String(quality));
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+/** 从 SDK streams[] 里挑一档：优先 <= 目标短边的最高档，没有则取最高档。 */
+function pickSdkStream(streams, quality) {
+  const rows = (Array.isArray(streams) ? streams : [])
+    .filter((s) => s && typeof s.url === 'string' && s.url !== '')
+    .map((s) => ({
+      url: s.url,
+      short: Number(s.height || s.width || 0) || parseInt(String(s.definition || ''), 10) || 0,
+      definition: String(s.definition || ''),
+      size: Number(s.size || 0),
+    }))
+    .sort((a, b) => a.short - b.short);
+  if (rows.length === 0) return null;
+  const want = qualityToShort(quality);
+  if (want > 0) {
+    const fits = rows.filter((r) => r.short <= want);
+    if (fits.length > 0) return fits[fits.length - 1];
+  }
+  return rows[rows.length - 1]; // 目标档没有就给最高，绝不降到 360p 兜底
+}
+
+/**
+ * 走 openhongguo SDK 取一集的轨道信息（新链路）。
+ * 与旧 AppSource.fetch 返回结构对齐：{url, spadeA, encrypt, definition, size, contentKey}。
+ * SDK 的 resolvePlayback 给 {playback:{streams,protected},contentKey:{key}}，
+ * 其中 key 是 32 位 hex，交给 offlineDecrypt 的 directKey 分支。
+ */
+async function sdkTrack(episodeId, quality) {
+  const r = await Ohg.resolvePlayback(String(episodeId));
+  const pb = (r && r.playback) || {};
+  const row = pickSdkStream(pb.streams, quality);
+  if (row === null) return null;
+  const protectedFlag = pb.protected === true;
+  const key = r.contentKey && typeof r.contentKey.key === 'string' ? r.contentKey.key : '';
+  if (protectedFlag && key === '') {
+    const why = (r.contentKeyError && r.contentKeyError.message) || 'SDK 未给出内容密钥';
+    throw new Error('加密分集取密钥失败：' + why);
+  }
+  return {
+    url: row.url,
+    spadeA: '',                 // SDK 路径不用 spadeA
+    contentKey: key,            // 32 位 hex，offlineDecrypt 直接用
+    encrypt: protectedFlag,
+    definition: row.definition,
+    size: row.size,
+  };
 }
 
 
@@ -199,11 +254,23 @@ function streamCopy(src, dst) {
  *
  * @returns {Promise<DecryptOut>}
  */
-async function offlineDecrypt(spadeAB64, ctPath, outPath) {
-  const sp = Spade.spadeToKey(spadeAB64, 0);
-  const key = sp.key;
-  if (!Spade.isValidKey(key)) {
-    throw new Error('spade 解包失败（可能为 ver2/AES-GCM 或格式异常）');
+async function offlineDecrypt(spadeAB64, ctPath, outPath, directKey) {
+  // 两条取 key 路径：
+  //  - 旧 App 协议：spadeA(base64) -> Spade 离线解包
+  //  - openhongguo SDK：resolvePlayback 直接给出 32 位 hex 的 contentKey.key
+  let key;
+  if (directKey !== null && directKey !== undefined && directKey !== '') {
+    key = String(directKey).trim().toLowerCase();
+    if (/^[0-9a-fA-F]{64}$/.test(key)) key = key.slice(0, 32); // 兼容 64 位带盐形式
+    if (!Spade.isValidKey(key)) {
+      throw new Error('contentKey 非法（SDK 返回的密钥不是 32 位 hex）');
+    }
+  } else {
+    const sp = Spade.spadeToKey(spadeAB64, 0);
+    key = sp.key;
+    if (!Spade.isValidKey(key)) {
+      throw new Error('spade 解包失败（可能为 ver2/AES-GCM 或格式异常）');
+    }
   }
 
   const outSize = fs.statSync(ctPath).size;
@@ -628,7 +695,15 @@ function logTiming(vid, quality, parts, totalMs, sizeBytes) {
 
 /** 确保某集已解密并落盘缓存，返回可播放 mp4 路径。
  *  priority 只影响「取直链」这一步在全局队列里的排队优先级。 */
-async function ensureDecrypted(vid, quality, priority) {
+/**
+ * 确保某集已解密可播。
+ * @param vid 旧链路是视频 vid；source='sdk' 时是 episodeId（缓存键通用）
+ * @param quality 清晰度（'1080p' 或短边数值）
+ * @param priority 'low' 表示后台预热
+ * @param source 'app'（默认，旧 App 协议）或 'sdk'（openhongguo SDK）
+ */
+async function ensureDecrypted(vid, quality, priority, source) {
+  const useSdk = source === 'sdk';
   fs.mkdirSync(cacheDir(), { recursive: true });
   ensureSpace();
   const p = cachePaths(vid, quality);
@@ -658,7 +733,7 @@ async function ensureDecrypted(vid, quality, priority) {
     // 分段计时：冷启动（首播）到底是卡在取址、下载还是解密，
     // 只在总耗时超过 SLOW_LOG_MS 或开了 HG_STREAM_DEBUG 时打一行，不刷屏。
     const t0 = Date.now();
-    const t = await videoTrack(vid, quality, priority);
+    const t = useSdk ? await sdkTrack(vid, quality) : await videoTrack(vid, quality, priority);
     const tFetch = Date.now() - t0;
     if (t === null || t === undefined || t.url === null
         || t.url === undefined || t.url === '') {
@@ -680,7 +755,7 @@ async function ensureDecrypted(vid, quality, priority) {
     const dl = await download(t.url, p.raw);
     const tDl = Date.now() - t1;
     const t2 = Date.now();
-    const r = await offlineDecrypt(t.spadeA, p.raw, p.raw);
+    const r = await offlineDecrypt(t.spadeA, p.raw, p.raw, t.contentKey);
     const tDec = Date.now() - t2;
     logTiming(vid, quality,
       { fetch: tFetch, download: tDl, decrypt: tDec, connections: dl.connections, host: hostOf(t.url) },
@@ -964,6 +1039,8 @@ function keepWindow(vids, recentMs) {
 
 module.exports = {
   videoTrack,
+  sdkTrack,
+  pickSdkStream,
   download,
   offlineDecrypt,
   cachePaths,

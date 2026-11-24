@@ -166,8 +166,8 @@ async function sync(webDir) {
     fs.writeFileSync(tmp, p.buf);
     fs.renameSync(tmp, dest);
     written.push(p.rel);
-    // 后端目录（server/src/...）有更新 → 需重启进程才生效
-    if (p.rel.startsWith('server/src/')) backendChanged = true;
+    // 后端目录（server/src/...）或 vendored SDK（vendor/...，含 wasm）有更新 → 需重启进程才生效
+    if (p.rel.startsWith('server/src/') || p.rel.startsWith('vendor/')) backendChanged = true;
   }
 
   // 阶段三：删除「上次同步过、这次仓库已无」的旧文件（敏感文件永不删）
