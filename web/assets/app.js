@@ -1374,9 +1374,15 @@
     } catch (e) { return; }
     if (detail.seriesId !== sid) return;   // 已经切到别的剧
 
+    // 照 beilunyang/openhongguo 的 Seasons() 主路径：
+    // 官方「系列剧」行(from=single_col_same_ip_series)是服务端按 album_id 权威分组的
+    // 结果，返回什么季就全收，前端不再按标题/stem/style 过滤。之前做标题过滤是错的：
+    // 官方认为同系列的剧，标题可能「他/她」一字之差（如
+    // 「公路求生榜一说她要走到公路尽头第三季」的其它季叫「…说他要走到公路尽头」），
+    // 用标题前缀匹配会把它们全过滤掉，导致详情页全季不显示。
+    // 标题过滤只属于「搜索兜底」路径（拿不到官方数据时），不适用于这里。
     const rows = [];
     const seenIds = new Set();
-    const curStyle = seasonStyle(meta.title || '');
     rows.push({
       id: String(sid), title: meta.title || '', cover: meta.cover || '',
       season_index: cur.num, season: '', upcoming: false, now: true,
@@ -1385,9 +1391,6 @@
     seenIds.add(String(sid));
     for (const it of items) {
       if (!it || seenIds.has(String(it.series_id))) continue;
-      if (!sameSeasonBase(it.title, cur.base)) continue;   // 只要真正的同系列（双向前缀匹配）
-      // 命名风格不同的是别的剧（二季 / 第二季 / 第2季 各自独立），不混进本列表
-      if (curStyle !== null && seasonStyle(it.title) !== curStyle) continue;
       seenIds.add(String(it.series_id));
       const ps = parseSeason(it.title);
       const idx = Number(it.season_index) > 0 ? Number(it.season_index) : (ps ? ps.num : 0);
