@@ -66,6 +66,9 @@ MIME['.svg'] = 'image/svg+xml';
 MIME['.png'] = 'image/png';
 MIME['.ico'] = 'image/x-icon';
 MIME['.mp4'] = 'video/mp4';
+// APK：Android TV 端在线更新从这里下载。必须能被 isStaticPath 命中，
+// 否则 4.3 设备拿不到安装包（GitHub 的 ECDSA 证书在 4.3 上握手必失败）。
+MIME['.apk'] = 'application/vnd.android.package-archive';
 
 /** 内联 favicon（SVG）。省掉一个二进制资源。 */
 const FAVICON_SVG =
@@ -77,7 +80,7 @@ const FAVICON_SVG =
 /** 判断是否前端静态资源路径。 */
 function isStaticPath(pathname) {
   if (pathname === '/' || pathname === '/ui' || pathname === '/ui/') return true;
-  return /\.(html|js|mjs|css|svg|png|jpg|jpeg|gif|ico|webp|woff2?|ttf|map)$/i.test(pathname);
+  return /\.(html|js|mjs|css|svg|png|jpg|jpeg|gif|ico|webp|woff2?|ttf|map|apk)$/i.test(pathname);
 }
 
 /** 静态文件服务（含 SPA 回退与目录穿越防护）。 */
