@@ -1,8 +1,8 @@
 {
-  "tag": "v3.20",
-  "code": 48,
-  "name": "电视版 3.20",
-  "notes": "1. 在线更新改走本机后端，不再请求 GitHub API（GitHub 用 ECDSA 证书，Android 4.3 的 OpenSSL 不支持 ECDSA 证书链，握手在协议层就失败，内置根证书无效）。\n2. 首页短剧/漫剧/AI剧 改走后端 /catalog 分页，不再首屏就显示「没有更多了」。\n3. 封面直连图床（300 宽缩略图），比后端代理快两个数量级；代理保留作兜底。\n4. 全季卡片、预约下一季按钮现在可以用遥控器选中（原先被播放按钮劫持了向下键）。\n5. 全季 / 下一季 / 预约上线提醒。",
-  "apk": "https://raw.githubusercontent.com/wff0325/hg-web-player/main/apk/minireel-tv-3.20.apk",
-  "size": 2102953
+  "tag": "v3.21",
+  "code": 49,
+  "name": "电视版 3.21",
+  "notes": "1. 在线更新改走本机后端 /tv/release.json，不再请求 GitHub API（GitHub 用 ECDSA 证书，Android 4.3 的 OpenSSL 不支持 ECDSA 证书链，握手在协议层就失败，加根证书无效）。\n2. 首页短剧/漫剧/AI剧 改走后端 /catalog 分页，并修复页码用 offset/30 推算导致每页重复、「没有更多了」提前出现的 bug。\n3. 封面直连图床（300 宽缩略图），实测 0.11 秒，比后端代理快两个数量级；代理保留作兜底。\n4. 全季卡片、预约下一季按钮现在可以用遥控器选中（原先被播放按钮劫持了向下键）。\n5. 全季 / 下一季 / 预约上线提醒。",
+  "apk": "/tv/apk/minireel-tv-3.21.apk",
+  "size": 2102954
 }
