@@ -141,7 +141,19 @@ main { padding: 0 12px; }
   font-size: 11px; font-weight: 700; letter-spacing: .3px;
   background: rgba(0,0,0,.62); backdrop-filter: blur(6px); color: #fff;
 }
-.card .badge.rank { background: linear-gradient(135deg, #ff2d55, #ff6b3d); }
+/* 名次在左上、热度在右上：榜单卡片两者同时显示也不会互相遮挡 */
+.card .badge.rank { background: linear-gradient(135deg, #ff2d55, #ff6b3d); left: 8px; }
+.card .badge.heat { background: linear-gradient(135deg, #ff7a18, #ff3d3d); left: auto; right: 8px; }
+/* 首页横滑轨道角标（.hcard 与 .card 结构相同，复用定位） */
+.hcard .thumb { position: relative; }
+.hcard .badge {
+  position: absolute; top: 6px; z-index: 2;
+  padding: 2px 6px; border-radius: 7px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .2px;
+  color: #fff; backdrop-filter: blur(6px);
+}
+.hcard .badge.rank { left: 6px; background: linear-gradient(135deg, #ff2d55, #ff6b3d); }
+.hcard .badge.heat { left: auto; right: 6px; background: linear-gradient(135deg, #ff7a18, #ff3d3d); }
 .card .ep-tag {
   position: absolute; right: 8px; bottom: 8px;
   padding: 3px 7px; border-radius: 8px; font-size: 11px;
@@ -313,9 +325,12 @@ body.hero-bg-only .hero-scrim {
 
 /* ---------- 题材筛选 chips ---------- */
 .topic-bar {
-  display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 2px 12px;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 2px 12px;
 }
 .topic-bar[hidden] { display: none; }
+.filter-row { display: flex; align-items: baseline; gap: 8px; }
+.filter-label { flex: 0 0 64px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.filter-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .topic-chip {
   border: 0; cursor: pointer; border-radius: 999px;
   padding: 7px 13px; font-size: 12.5px; font-weight: 600;
@@ -333,6 +348,32 @@ body.hero-bg-view .topic-chip {
 body.hero-bg-view .topic-chip.active {
   background: var(--accent); color: #fff;
 }
+
+/* ---------- 热播榜二级切换（5 分类 × 30 官方榜单） ---------- */
+.rank-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 2px 4px; }
+.rank-bar[hidden] { display: none; }
+.rank-line { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.rank-line::-webkit-scrollbar { display: none; }
+.rank-chip {
+  flex: 0 0 auto; border: 0; cursor: pointer; border-radius: 999px;
+  padding: 6px 12px; font-size: 12.5px; font-weight: 600;
+  background: var(--bg-soft); color: var(--text); white-space: nowrap;
+}
+.rank-chip.on { background: var(--accent); color: #fff; }
+.rank-line.sub .rank-chip { font-size: 12px; padding: 5px 11px; opacity: .82; }
+.rank-line.sub .rank-chip.on { opacity: 1; }
+body.hero-bg-view .rank-chip { background: transparent; color: var(--text); }
+body.hero-bg-view .rank-chip.on { background: var(--accent); color: #fff; }
+
+/* ---------- 今日上新日期切换 ---------- */
+.date-chips { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+.date-chips::-webkit-scrollbar { display: none; }
+.date-chip {
+  flex: 0 0 auto; border: 0; cursor: pointer; border-radius: 999px;
+  padding: 3px 9px; font-size: 11px; font-weight: 600;
+  background: var(--bg-soft); color: var(--text);
+}
+.date-chip.on { background: var(--accent); color: #fff; }
 
 .list-status { text-align: center; color: var(--muted); font-size: 13px; padding: 22px 0 30px; }
 .sentinel { height: 1px; }
@@ -359,6 +400,15 @@ body.hero-bg-view .topic-chip.active {
 .text-btn.light { color: rgba(255,255,255,.86); font-weight: 600; font-size: 13px; }
 .hot-words { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 14px 12px; }
 .hot-words .word { padding: 7px 12px; border-radius: 999px; background: var(--bg-soft); color: var(--muted); font-size: 13px; cursor: pointer; }
+/* 搜索筛选 chips：SDK SearchFilter（真人剧/漫剧/AI剧等），跟随明暗主题 */
+.search-filters { display: flex; flex-wrap: nowrap; gap: 8px; padding: 10px 14px 4px; overflow-x: auto; scrollbar-width: none; }
+.search-filters::-webkit-scrollbar { display: none; }
+.search-filters .sf-chip {
+  flex: 0 0 auto; padding: 6px 13px; border: 0; border-radius: 999px;
+  background: var(--bg-soft); color: var(--text); font-size: 12.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap;
+}
+.search-filters .sf-chip.active { background: var(--accent); color: #fff; }
 #searchPage .grid { padding: 0 12px; }
 
 /* ---------- 详情 ---------- */
@@ -381,6 +431,21 @@ body.hero-bg-view .topic-chip.active {
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font-size: 11.5px; color: var(--muted); background: var(--active); padding: 4px 8px; border-radius: 7px; }
 .chip.accent { color: #ffb3c1; background: var(--accent-soft); }
+.actor-chip { border: 0; cursor: pointer; white-space: nowrap; }
+.actor-chip:hover { color: var(--accent); }
+
+/* ---------- 演员主页 ---------- */
+.person-title { font-size: 15px; font-weight: 700; }
+.person-head { display: flex; gap: 14px; padding: 16px 14px 8px; }
+.ph-avatar {
+  width: 68px; height: 68px; border-radius: 50%; overflow: hidden;
+  background: var(--bg-soft); flex: 0 0 auto; display: grid; place-items: center; font-size: 28px;
+}
+.ph-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.ph-info h2 { margin: 0 0 6px; font-size: 19px; }
+.ph-info p { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.ph-stat { margin-top: 8px; font-size: 12px; color: var(--muted); }
+#personPage .grid { padding: 0 12px; }
 .hero-actions { display: flex; gap: 8px; margin-top: auto; }
 .btn { border: 0; cursor: pointer; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; font-weight: 700; }
 .btn.primary { background: var(--accent); color: #fff; }

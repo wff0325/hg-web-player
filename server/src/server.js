@@ -434,6 +434,8 @@ class Server {
           data = await OhgData.album(String(q.album_id || q.id || '')); break;
         case 'recommend':
           data = await OhgData.recommend(String(q.series_id || q.id || '')); break;
+        case 'rank-meta':
+          data = await OhgData.rankMeta(); break;
         case 'rank-groups':
           data = await OhgData.rankGroups(); break;
         case 'rank-rows':
@@ -509,6 +511,7 @@ class Server {
       // 导致 /health 的 disk_free_mb 恒为 null）
       const free = Stream.diskFreeBytes();
       m.disk_free_mb = free === null ? null : Math.round(free / 1048576);
+      m.sdk_cache = Ohg.cacheStats();
       Res.json(req, res, 200, m);
       return;
     }
@@ -583,8 +586,17 @@ class Server {
       const searchLimit = (lim === null || lim === undefined || lim === '')
         ? 0 : Number.parseInt(lim, 10);
       // 数据源：openhongguo SDK。前端契约不变（query/count/results/has_more/next_offset）。
+      // filter=real|comic|ai|film 映射到 SDK SearchFilter（白名单，防注入）。
+      const FILTER_MAP = {
+        real: 'content_type_short_play', comic: 'content_type_dynamic_comic',
+        ai: 'content_type_ai_dynamic_comic', film: 'content_type_long_video',
+        new: 'search_range_unread',
+      };
+      const fk = String(q.filter || '');
+      const filters = Object.prototype.hasOwnProperty.call(FILTER_MAP, fk)
+        ? [FILTER_MAP[fk]] : [];
       const m = Json.obj();
-      const pg = await OhgData.search(query, searchLimit || 40, []);
+      const pg = await OhgData.search(query, searchLimit || 40, filters);
       m.query = pg.query;
       m.count = pg.count;
       m.results = pg.results;
@@ -595,17 +607,22 @@ class Server {
     }
 
     if (method === 'GET' && pathname === '/rank') {
-      const board = q.board !== undefined ? q.board : 'recommend';
+      const board = q.board !== undefined ? q.board : 'hot';
       const limit = Number.parseInt(q.limit !== undefined ? q.limit : '30', 10);
       const offset = Number.parseInt(q.offset !== undefined ? q.offset : '0', 10);
-      // 数据源：openhongguo SDK shortRank。前端契约不变。
-      const pg = await OhgData.rank(board, limit, offset);
+      // board 支持短名与官方 ID；content 切换「全部/系列剧/漫剧/真人剧/AI剧」。
+      const pg = await OhgData.rank(board, limit, offset,
+        q.content !== undefined ? q.content : '', q.cursor !== undefined ? q.cursor : '');
       const m = Json.obj();
       m.board = pg.board;
       m.name = pg.name;
+      m.content = pg.content;
+      m.board_id = pg.board_id;
+      m.contents = pg.contents;
       m.items = pg.items;
       m.has_more = pg.has_more;
       m.next_offset = pg.next_offset;
+      m.cursor = pg.cursor;
       Res.json(req, res, 200, m);
       return;
     }
@@ -671,7 +688,14 @@ class Server {
       // 数据源：openhongguo SDK shortFilter。channel=real|comic|ai，page 从 1 开始。
       const channel = q.channel !== undefined && q.channel !== '' ? q.channel : 'real';
       const page = Number.parseInt(q.page !== undefined ? q.page : '1', 10) || 1;
-      const data = await OhgData.catalog(channel, page, 30);
+      // limit 由前端指定：首页首屏只要 10 张（一次 SDK 调用），分类页滚动用默认 30。
+      const limit = Number.parseInt(q.limit !== undefined ? q.limit : '30', 10) || 30;
+      // selections 是官方筛选面板选项（如 category_dim_theme=cate_5000），JSON 字符串传入
+      let selections = null;
+      if (q.selections) {
+        try { selections = JSON.parse(q.selections); } catch (e) { selections = null; }
+      }
+      const data = await OhgData.catalog(channel, page, limit, selections);
       Res.json(req, res, 200, data);
       return;
     }

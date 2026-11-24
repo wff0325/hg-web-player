@@ -117,6 +117,8 @@
       cover: item.cover || item.series_cover || '',
       eps: Number(item.episode_cnt || item.episodeCount || 0),
       score: item.score || '',
+      hot: item.hot || '',
+      heat: Number(item.heat || 0),
       play: item.play_cnt || item.views || 0,
       tags: item.tags || item.category || [],
       intro: item.abstract || item.intro || item.description || '',
@@ -124,15 +126,27 @@
     };
   }
 
+  /* 热度角标：名次与热度同时显示，不再互相吞掉。
+     score 是榜单自己的推荐值（如「994万推荐」），hot 是红果热度值，两者都保留。 */
+  function badges(d) {
+    let s = '';
+    if (d.rank) s += `<span class="badge rank">TOP ${d.rank}</span>`;
+    if (d.hot) s += `<span class="badge heat">🔥 ${esc(d.hot)}</span>`;
+    else if (d.score) s += `<span class="badge heat">${esc(d.score)}</span>`;
+    return s;
+  }
+
   function card(item) {
     const d = normalize(item);
     const node = el('div', 'card');
     const tags = Array.isArray(d.tags) ? d.tags : [];
-    const sub = [d.eps ? `全 ${d.eps} 集` : '', tags.slice(0, 2).join(' / '), d.score ? `评分 ${d.score}` : ''].filter(Boolean).join(' · ');
+    // 榜单 score 是「xx万推荐」而非评分，文案跟随上游，不再硬加「评分」前缀
+    const sub = [d.eps ? `全 ${d.eps} 集` : '', tags.slice(0, 2).join(' / '),
+      d.score ? esc(d.score) : ''].filter(Boolean).join(' · ');
     node.innerHTML = `
       <div class="thumb">
         ${d.cover ? `<img loading="lazy" src="${d.cover}" alt="">` : ''}
-        ${d.rank ? `<span class="badge rank">TOP ${d.rank}</span>` : (d.score ? `<span class="badge">${d.score} 分</span>` : '')}
+        ${badges(d)}
         ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
       </div>
       <div class="name">${d.title}</div>
@@ -142,9 +156,12 @@
   }
 
   /* ---------------- 首页 ---------------- */
-  const home = { view: 'hot', page: 0, loading: false, done: false, items: [] };
+  const home = { view: 'hot', page: 0, loading: false, done: false, items: [], selections: {} };
+  // 榜单状态：content=分类（全部/系列剧/漫剧/真人剧/AI剧），board=官方榜单 ID
+  const rankUI = { content: 'all', board: 'ranklist_hot_play_sc', cursor: '', meta: null };
   const grid = $('grid'), status = $('status'), sentinel = $('sentinel');
   const homeHero = $('homeHero'), homeSections = $('homeSections'), topicBar = $('topicBar');
+  const rankBar = $('rankBar');
   let homeFeedGen = 0;      // 首页增强区的代际，切 tab 时作废旧请求
   let bannerTimer = 0;      // Banner 自动轮播定时器
   let seasonRowCleanup = null; // 全季横滑轨道的事件清理
@@ -220,28 +237,57 @@
     bannerTimer = setInterval(() => { if (!paused && player.hidden) go(idx + 1); }, 5000);
   }
 
+  function hcard(d) {
+    const c = el('div', 'hcard');
+    c.innerHTML = `
+      <div class="thumb">
+        ${d.cover ? `<img loading="lazy" src="${esc(d.cover)}" alt="">` : ''}
+        ${badges(d)}
+        ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
+      </div>
+      <div class="name">${esc(d.title)}</div>`;
+    c.addEventListener('click', () => openDetail(d.id, d));
+    return c;
+  }
+
   /* 分区横滑轨道：标题 + 可横向滑动的卡片行，「查看更多」切到对应分类 tab */
-  function renderRow(name, arg, cards) {
+  function renderRow(name, arg, cards, hideMore) {
     if (!cards.length) return null;
     const sec = el('div', 'home-section');
     const title = el('div', 'sec-title');
-    title.innerHTML = `<h2>${esc(name)}</h2><span class="more" data-arg="${esc(arg)}">查看更多</span>`;
+    title.innerHTML = `<h2>${esc(name)}</h2>`
+      + (hideMore ? '' : `<span class="more" data-arg="${esc(arg)}">查看更多</span>`);
     const row = el('div', 'hrow');
-    cards.forEach((d) => {
-      const c = el('div', 'hcard');
-      c.innerHTML = `
-        <div class="thumb">
-          ${d.cover ? `<img loading="lazy" src="${esc(d.cover)}" alt="">` : ''}
-          ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
-        </div>
-        <div class="name">${esc(d.title)}</div>`;
-      c.addEventListener('click', () => openDetail(d.id, d));
-      row.appendChild(c);
-    });
-    title.querySelector('.more').addEventListener('click', () => switchTab(arg));
+    cards.forEach((d) => row.appendChild(hcard(d)));
+    const more = title.querySelector('.more');
+    if (more) more.addEventListener('click', () => switchTab(arg));
     sec.appendChild(title);
     sec.appendChild(row);
     return sec;
+  }
+
+  function fmtDay(s) {
+    const t = String(s || '');
+    if (t.length !== 8) return t;
+    const d = new Date();
+    const today = String(d.getFullYear()) + String(d.getMonth() + 1).padStart(2, '0')
+      + String(d.getDate()).padStart(2, '0');
+    const md = t.slice(4, 6) + '/' + t.slice(6, 8);
+    return t === today ? '今天' : (md);
+  }
+
+  async function pickNewReleaseDay(date, row) {
+    try {
+      const nr = await api('/sdk/new-releases', { date });
+      const hrow = row.querySelector('.hrow');
+      if (hrow) {
+        hrow.innerHTML = '';
+        toCards((nr && nr.items || []).map((x) => x.series || x)).slice(0, 10)
+          .forEach((d) => hrow.appendChild(hcard(d)));
+      }
+      row.querySelectorAll('.date-chip').forEach((b) =>
+        b.classList.toggle('on', b.dataset.date === String(nr.date || date)));
+    } catch (e) { /* 切换失败保留原列表 */ }
   }
 
   /* 首页增强区：Banner（热播榜前 6）+ 真人剧 / AI漫剧 / AI短剧 三条横滑轨道。
@@ -251,9 +297,9 @@
     try {
       const [rank, real, comic, ai] = await Promise.all([
         api('/rank', { board: 'hot', limit: 6 }).catch(() => null),
-        api('/catalog', { channel: 'real', page: 1 }).catch(() => null),
-        api('/catalog', { channel: 'comic', page: 1 }).catch(() => null),
-        api('/catalog', { channel: 'ai', page: 1 }).catch(() => null),
+        api('/catalog', { channel: 'real', page: 1, limit: 10 }).catch(() => null),
+        api('/catalog', { channel: 'comic', page: 1, limit: 10 }).catch(() => null),
+        api('/catalog', { channel: 'ai', page: 1, limit: 10 }).catch(() => null),
       ]);
       if (gen !== homeFeedGen) return;   // 期间切走了视图
       renderBanner(homeHero, toCards(rank && rank.items));
@@ -266,9 +312,76 @@
         const row = renderRow(name, arg, toCards(data && data.items).slice(0, 10));
         if (row) homeSections.appendChild(row);
       });
+      // 今日上新：openhongguo SDK newReleases（第四条轨道，带 7 天日期切换）
+      api('/sdk/new-releases', {}).then((nr) => {
+        if (gen !== homeFeedGen) return;
+        const cards = toCards((nr && nr.items || []).map((x) => x.series || x)).slice(0, 10);
+        const row = renderRow('今日上新', 'hot', cards, true);
+        if (!row) return;
+        const dates = Array.isArray(nr && nr.dates) ? nr.dates : [];
+        if (dates.length > 1) {
+          const picker = el('div', 'date-chips');
+          dates.slice(-7).forEach((dt) => {
+            const b = el('button', 'date-chip' + (String(dt) === String(nr.date) ? ' on' : ''), fmtDay(dt));
+            b.dataset.date = String(dt);
+            b.addEventListener('click', () => pickNewReleaseDay(String(dt), row));
+            picker.appendChild(b);
+          });
+          const title = row.querySelector('.sec-title');
+          if (title) title.appendChild(picker);
+        }
+        homeSections.appendChild(row);
+      }).catch(() => {});
+      // 书城推荐：openhongguo SDK discover（推荐频道），不阻塞上面四条轨道
+      api('/sdk/discover', { limit: 12 }).then((d) => {
+        if (gen !== homeFeedGen) return;
+        const row = renderRow('书城推荐', 'hot', toCards(d && d.items).slice(0, 10), true);
+        if (row) homeSections.appendChild(row);
+      }).catch(() => {});
     } catch (e) {
       // 首页增强失败静默降级，主榜单仍可正常浏览
     }
+  }
+
+  /* 热播榜二级切换栏：分类（全部/系列剧/漫剧/真人剧/AI剧）+ 该类下的官方榜单。
+     数据来自 shortRank 返回的 contents，共 30 个真实榜单，不再只有「推荐榜」。 */
+  function renderRankBar(meta) {
+    if (!rankBar) return;
+    if (home.view !== 'hot' || !meta || !(meta.contents || []).length) {
+      rankBar.hidden = true; rankBar.innerHTML = ''; return;
+    }
+    const groups = meta.contents;
+    const g = groups.find((x) => x.id === rankUI.content) || groups[0];
+    rankUI.content = g.id;
+    if (!(g.boards || []).some((b) => b.id === rankUI.board)) {
+      rankUI.board = (g.boards && g.boards[0] && g.boards[0].id) || rankUI.board;
+    }
+    rankBar.hidden = false;
+    rankBar.innerHTML = `
+      <div class="rank-line">${groups.map((x) =>
+        `<button class="rank-chip${x.id === g.id ? ' on' : ''}" data-content="${esc(x.id)}">${esc(x.name)}</button>`).join('')}</div>
+      <div class="rank-line sub">${(g.boards || []).map((b) =>
+        `<button class="rank-chip${b.id === rankUI.board ? ' on' : ''}" data-board="${esc(b.id)}">${esc(b.name)}</button>`).join('')}</div>`;
+    rankBar.onclick = (e) => {
+      const btn = e.target.closest('.rank-chip');
+      if (!btn) return;
+      if (btn.dataset.content) {
+        const next = groups.find((x) => x.id === btn.dataset.content);
+        const first = next && next.boards && next.boards[0];
+        reloadRank(btn.dataset.content, first ? first.id : rankUI.board);
+      } else if (btn.dataset.board) {
+        reloadRank(rankUI.content, btn.dataset.board);
+      }
+    };
+  }
+
+  function reloadRank(content, board) {
+    rankUI.content = content; rankUI.board = board; rankUI.cursor = '';
+    homeGen += 1;
+    home.page = 0; home.loading = false; home.done = false; home.items = [];
+    grid.innerHTML = ''; status.textContent = '';
+    skeleton();
+    loadHome();
   }
 
   function clearHomeExtras() {
@@ -277,31 +390,53 @@
     if (homeHero) homeHero.innerHTML = '';
     if (homeSections) homeSections.innerHTML = '';
     if (topicBar) { topicBar.innerHTML = ''; topicBar.hidden = true; }
+    if (rankBar) { rankBar.innerHTML = ''; rankBar.hidden = true; rankBar.onclick = null; }
   }
 
-  /* 题材筛选 chips：从当前分类已加载的卡片 tags 聚合高频题材，前端过滤（不额外请求） */
-  function renderTopicBar() {
+  /* 分类筛选：直接用 SDK shortFilterPanel 的官方筛选面板（体裁/主题/角色等 7 行），
+     选中后走后端 shortFilter 重新取列表，不再拿已加载卡片的 tags 本地凑数。 */
+  const FILTER_GENRE = { real: 'short_play', comic: 'comic_series', ai: 'ai_series' };
+
+  async function renderTopicBar() {
     if (!topicBar) return;
     if (home.view === 'index' || home.view === 'hot' || home.view === 'mine') {
       topicBar.innerHTML = ''; topicBar.hidden = true; return;
     }
-    const counts = {};
-    home.items.forEach((d) => {
-      const tags = Array.isArray(d.tags) ? d.tags : (d.tags ? String(d.tags).split(/[,，/]/) : []);
-      tags.forEach((t) => { t = String(t).trim(); if (t) counts[t] = (counts[t] || 0) + 1; });
-    });
-    const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 12);
-    if (!top.length) { topicBar.innerHTML = ''; topicBar.hidden = true; return; }
-    topicBar.hidden = false;
-    topicBar.className = 'topic-bar';
-    topicBar.innerHTML = '';
-    const mk = (label, val) => {
-      const b = el('button', 'topic-chip' + (home.topic === val ? ' active' : ''), esc(label));
-      b.addEventListener('click', () => { home.topic = val; applyTopicFilter(); renderTopicBar(); });
-      return b;
-    };
-    topicBar.appendChild(mk('全部', ''));
-    top.forEach((t) => topicBar.appendChild(mk(t, t)));
+    try {
+      const r = await api('/filters', { genre: FILTER_GENRE[home.view] || 'short_play' });
+      const rows = ((r && r.rows) || []).filter((x) => x && x.key && x.key !== 'genre'
+        && Array.isArray(x.options) && x.options.length);
+      if (!rows.length) { topicBar.innerHTML = ''; topicBar.hidden = true; return; }
+      topicBar.hidden = false;
+      topicBar.className = 'topic-bar';
+      topicBar.innerHTML = rows.map((row) => `
+        <div class="filter-row">
+          <span class="filter-label">${esc(row.name)}</span>
+          <div class="filter-options">${row.options.slice(0, 16).map((o) => {
+            const val = String(o.value !== undefined ? o.value : o.key || '');
+            const on = (home.selections[row.key] || []).includes(val);
+            return `<button class="topic-chip${on ? ' active' : ''}" data-key="${esc(row.key)}" data-val="${esc(val)}">${esc(o.label)}</button>`;
+          }).join('')}</div>
+        </div>`).join('');
+      topicBar.onclick = (e) => {
+        const b = e.target.closest('.topic-chip');
+        if (!b) return;
+        const key = b.dataset.key, val = b.dataset.val;
+        const cur = home.selections[key] || [];
+        home.selections[key] = cur.includes(val) ? [] : [val];   // 单选，再点一次取消
+        reloadCatalog();
+      };
+    } catch (e) {
+      topicBar.innerHTML = ''; topicBar.hidden = true;
+    }
+  }
+
+  function reloadCatalog() {
+    homeGen += 1;
+    home.page = 0; home.loading = false; home.done = false; home.items = [];
+    grid.innerHTML = ''; status.textContent = '';
+    skeleton();
+    loadHome();
   }
 
   function applyTopicFilter() {
@@ -330,7 +465,7 @@
     homeFeedGen += 1;
     home.started = true;
     home.view = view; home.page = 0; home.loading = false; home.done = false; home.items = [];
-    home.topic = '';
+    home.topic = ''; home.selections = {};
     grid.innerHTML = ''; status.textContent = '';
     clearHomeExtras();
     if (view === 'mine') return renderMine();
@@ -353,18 +488,32 @@
     try {
       let items = [];
       let more = false;
+      let rankResult = null;
       if (home.view === 'hot') {
-        // 榜单也走 offset 翻页：offset=0 时上游不返回 has_more，用「是否满 30 条」判断
-        const r = await api('/rank', { board: 'hot', limit: 30, offset: home.page * 30 });
-        items = r.items || [];
-        more = home.page === 0 ? items.length >= 30 : !!r.has_more;
+        // 官方榜单每页只有 10~12 条，用 SDK cursor 续页，不再拿 offset×30 硬切
+        const params = { board: rankUI.board, limit: 30 };
+        if (rankUI.content && rankUI.content !== 'all') params.content = rankUI.content;
+        if (rankUI.cursor) params.cursor = rankUI.cursor;
+        else params.offset = home.page * 30;
+        rankResult = await api('/rank', params);
+        items = rankResult.items || [];
+        more = !!rankResult.has_more;
       } else {
-        const r = await api('/catalog', { channel: home.view, page: home.page + 1 });
+        const params = { channel: home.view, page: home.page + 1 };
+        if (home.selections && Object.keys(home.selections).length) {
+          params.selections = JSON.stringify(home.selections);
+        }
+        const r = await api('/catalog', params);
         items = r.items || [];
         more = !!r.has_more;
       }
 
       if (gen !== homeGen) return;   // 期间切换了视图，这批数据作废
+      if (rankResult) {
+        if (rankResult.contents && rankResult.contents.length) rankUI.meta = { contents: rankResult.contents };
+        rankUI.cursor = String(rankResult.cursor || '');
+        if (home.page === 0) renderRankBar(rankUI.meta);
+      }
       if (home.page === 0) {
         grid.innerHTML = '';
         // 各分类页也继承首页的轮播背景：用本分类首批数据渲染 Banner（含文案/立即观看）
@@ -462,6 +611,7 @@
     wrap.innerHTML = `
       <div class="mine-tools">
         <button class="text-btn light" id="clearCacheBtn" title="清空全部观看记录，并清理已缓存的视频">清空历史记录</button>
+        <button class="text-btn light" id="resetDeviceBtn" title="更换匿名播放设备，取址失败时可点这里">更换播放设备</button>
       </div>
       <h2>我的预约${resvs.length ? ' <span class="mine-count">' + resvs.length + '</span>' : ''}</h2>
       <div class="mini-list" id="reserveList">${resvs.length ? '' : '<div class="empty">还没有预约。在剧集详情页点「预约下一季」，下一季上线时首页会提醒你</div>'}</div>
@@ -476,6 +626,17 @@
     rows.forEach((r) => historyList.appendChild(miniRow(r, true)));
     favs.forEach((r) => favList.appendChild(miniRow(r, false)));
     grid.appendChild(wrap);
+    const rd = $('resetDeviceBtn');
+    if (rd) {
+      rd.addEventListener('click', async () => {
+        rd.disabled = true;
+        try {
+          await api('/sdk/reset-device', {});
+          toast('已更换播放设备，可重新播放试试');
+        } catch (e) { toast('更换失败：' + (e.message || '未知错误')); }
+        rd.disabled = false;
+      });
+    }
     const cc = $('clearCacheBtn');
     if (cc) {
       cc.addEventListener('click', async () => {
@@ -575,6 +736,29 @@
   const searchPage = $('searchPage'), searchGrid = $('searchGrid'), searchStatus = $('searchStatus');
   const HOT_WORDS = ['总裁', '重生', '战神', '穿越', '复仇', '萌宝', '甜宠', '逆袭'];
 
+  /* 搜索筛选：openhongguo SDK SearchFilter（真人剧/漫剧/AI剧/影视剧/未看过）。 */
+  const SEARCH_FILTERS = [
+    ['', '全部'], ['real', '真人剧'], ['comic', '漫剧'],
+    ['ai', 'AI剧'], ['film', '影视剧'], ['new', '未看过'],
+  ];
+  let searchFilter = '';
+  function renderSearchFilters() {
+    const box = $('searchFilters');
+    if (!box) return;
+    box.innerHTML = '';
+    SEARCH_FILTERS.forEach(([val, label]) => {
+      const b = el('button', 'sf-chip' + (searchFilter === val ? ' active' : ''), label);
+      b.addEventListener('click', () => {
+        if (searchFilter === val) return;
+        searchFilter = val;
+        renderSearchFilters();
+        if ($('searchInput').value.trim()) doSearch();
+      });
+      box.appendChild(b);
+    });
+    box.hidden = false;
+  }
+
   /* openhongguo SDK 搜索增强：真实热搜/联想/提示词。接口失败时静默回退到本地默认。 */
   async function loadHotWords() {
     const box = $('hotWords');
@@ -595,6 +779,25 @@
       box.dataset.init = '1';
     } catch (e) { /* 保留本地默认热词 */ }
   }
+  /* openhongguo SDK searchCues：搜索框提示词轮播（用户没输入、没聚焦时才换） */
+  let cueTimer = 0;
+  async function loadSearchCues() {
+    if (cueTimer) return;
+    try {
+      const r = await api('/sdk/cues', {});
+      const cues = (r && r.items || []).map(String).filter((s) => s && s !== '书名');
+      if (!cues.length) return;
+      let i = 0;
+      const input = $('searchInput');
+      cueTimer = setInterval(() => {
+        if (!$('searchPage').hidden && document.activeElement !== input && !input.value) {
+          input.placeholder = cues[i % cues.length];
+        }
+        i += 1;
+      }, 3500);
+    } catch (e) { /* 提示词失败不影响搜索 */ }
+  }
+
   const SEARCH_HIST_KEY = 'mr.searches';
 
   function getSearchHist() {
@@ -747,6 +950,8 @@
       hw.dataset.init = '1';
     }
     loadHotWords(); // 异步替换为 SDK 真实热搜（失败则用本地默认）
+    loadSearchCues(); // SDK 搜索框提示词轮播
+    renderSearchFilters(); // SDK 筛选 chips
     hideSuggest();
     $('searchInput').value = '';
     renderSearchHist();
@@ -764,10 +969,16 @@
     $('hotWords').hidden = true;
     searchGrid.innerHTML = '';
     searchStatus.innerHTML = '搜索中…';
+    renderSearchFilters();
     try {
-      const r = await api('/search', { q, limit: 40 });
+      const params = { q, limit: 40 };
+      if (searchFilter) params.filter = searchFilter;
+      const r = await api('/search', params);
       const items = r.results || [];
-      searchStatus.textContent = items.length ? `共 ${items.length} 个结果` : '没有找到相关短剧';
+      const fk = SEARCH_FILTERS.find(([v]) => v === searchFilter);
+      searchStatus.textContent = items.length
+        ? `共 ${items.length} 个结果${fk && searchFilter ? '（' + fk[1] + '）' : ''}`
+        : '没有找到相关短剧';
       items.forEach((it) => searchGrid.appendChild(card(it)));
     } catch (e) {
       searchStatus.textContent = e.message || '搜索失败';
@@ -779,6 +990,60 @@
   let detail = { seriesId: '', meta: null, episodes: [] };
   let detailNext = null;        // 当前详情页检测到的下一季；null = 没有/未检测
   let detailNextToken = 0;      // 竞态 token：切剧后丢弃旧的异步检测结果
+
+  /* 演员主页：SDK person + personWorks。详情页演员 chip 点进来。 */
+  const personPage = $('personPage');
+  let personCursor = '', personLoading = false, personId = '';
+
+  async function openPerson(userId, name) {
+    if (!userId || !personPage) return;
+    personId = String(userId);
+    detailPage.hidden = true;
+    personPage.hidden = false;
+    document.body.style.overflow = 'hidden';
+    personPage.scrollTop = 0;
+    $('personName').textContent = name || '演员主页';
+    $('personHead').innerHTML = '<span class="muted">加载中…</span>';
+    $('personGrid').innerHTML = '';
+    $('personStatus').textContent = '';
+    $('personCount').textContent = '';
+    personCursor = '';
+    try {
+      const p = await api('/sdk/person', { user_id: personId });
+      if (personId !== String(userId)) return;
+      const tags = (Array.isArray(p.tags) ? p.tags : (p.labels || []))
+        .map((t) => `<span class="chip">${esc(typeof t === 'string' ? t : (t.name || t.text || ''))}</span>`).join('');
+      $('personHead').innerHTML = `
+        <div class="ph-avatar">${p.avatar ? `<img src="${esc(p.avatar)}" alt="">` : '👤'}</div>
+        <div class="ph-info"><h2>${esc(p.name || name || '演员')}</h2>
+          <p>${esc(p.description || '')}</p>
+          <div class="chips">${tags}</div>
+          <div class="ph-stat">粉丝 ${fmtCount(p.followers || 0)} · 获赞 ${fmtCount(p.likes || 0)}</div>
+        </div>`;
+    } catch (e) {
+      $('personHead').innerHTML = `<div class="ph-info"><h2>${esc(name || '演员')}</h2></div>`;
+    }
+    await loadPersonWorks();
+  }
+
+  async function loadPersonWorks() {
+    if (personLoading || !personId) return;
+    personLoading = true;
+    const uid = personId;
+    try {
+      const r = await api('/sdk/person-works', { user_id: uid, cursor: personCursor, limit: 30 });
+      if (uid !== personId) return;
+      const grid = $('personGrid');
+      (r.items || []).forEach((it) => grid.appendChild(card(it)));
+      personCursor = String(r.cursor || r.next_offset || '');
+      $('personCount').textContent = grid.children.length ? `${grid.children.length} 部` : '';
+      $('personStatus').innerHTML = r.has_more && personCursor
+        ? '<button class="text-btn" id="personMore">加载更多</button>' : '— 已全部显示 —';
+      const more = $('personMore');
+      if (more) more.addEventListener('click', loadPersonWorks);
+    } catch (e) { $('personStatus').textContent = '暂无作品'; }
+    personLoading = false;
+  }
 
   async function openDetail(seriesId, seed, keepHash) {
     if (!seriesId) return;
@@ -830,7 +1095,12 @@
         m.play_cnt ? `${fmtCount(m.play_cnt)} 次播放` : '',
         ...(m.category || []).slice(0, 3)
       ].filter(Boolean);
-      $('detailChips').innerHTML = chips.map((c, i) => `<span class="chip${i === 0 ? ' accent' : ''}">${c}</span>`).join('');
+      const celebs = Array.isArray(m.celebrities) ? m.celebrities : [];
+      $('detailChips').innerHTML = chips.map((c, i) => `<span class="chip${i === 0 ? ' accent' : ''}">${c}</span>`).join('')
+        + celebs.map((c) => `<button class="chip actor-chip" data-uid="${esc(c.user_id)}">${esc(c.name || '演员')} ›</button>`).join('');
+      $('detailChips').querySelectorAll('.actor-chip').forEach((b) => {
+        b.addEventListener('click', () => openPerson(b.dataset.uid, b.textContent.replace(/\s*›$/, '')));
+      });
       $('detailIntro').textContent = m.abstract || (seed && seed.intro) || '暂无简介';
       $('epCount').textContent = `${detail.episodes.length} 集`;
       renderEpisodes();
@@ -2674,6 +2944,11 @@
     if (home.view === 'index') document.body.classList.add('hero-bg-view');
     history.replaceState(null, '', location.pathname + location.search);
   });
+  $('personBack').addEventListener('click', () => {
+    personPage.hidden = true;
+    detailPage.hidden = false;
+    document.body.style.overflow = 'hidden';
+  });
   $('playFirst').addEventListener('click', () => {
     const hist = records.history()[detail.seriesId];
     playEpisode(hist ? hist.index : 1);
@@ -2827,6 +3102,30 @@
     })();
   }
 
+  /** 自动检测版本变化：每 30 秒比对 /version 内容哈希，发现新版提示刷新。
+   *  解决浏览器缓存旧 app.js 导致「显示的不是最新」的问题。 */
+  function startVersionWatch() {
+    const vt = $('versionTag');
+    let current = vt ? String(vt.textContent || '').trim() : '';
+    setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/version?t=` + Date.now(), { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const hash = String(j.version || '').slice(0, 12);
+        if (!hash || hash === current) return;
+        if (current === '') { current = hash; return; } // 首次只记录
+        current = hash;
+        const banner = $('updateBanner');
+        if (banner) {
+          const txt = banner.querySelector('.ub-text');
+          if (txt) txt.textContent = '发现新版本（' + (j.display || hash.slice(0, 6)) + '），刷新即可使用';
+          banner.hidden = false;
+        }
+      } catch (e) { /* 检测失败不影响使用 */ }
+    }, 30000);
+  }
+
   /** 新版本提示横幅：由 index.html 的更新引导脚本派发 mr:update 触发。 */
   function bindUpdateBanner() {
     const banner = $('updateBanner');
@@ -2879,6 +3178,7 @@
   async function boot() {
     if (CFG.BRAND) { document.title = CFG.BRAND; $('brandText').textContent = CFG.BRAND; }
     bindUpdateBanner();
+    startVersionWatch();
     bootTheme();
     await refreshClientConfig(true);
     const savedQ = store.get('mr.quality', '');

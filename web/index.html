@@ -52,6 +52,7 @@
 
 <main id="app">
   <div id="homeHero"></div>
+  <div id="rankBar" class="rank-bar" hidden></div>
   <div id="homeSections"></div>
   <div id="topicBar"></div>
   <div class="grid" id="grid"></div>
@@ -70,6 +71,7 @@
   </div>
   <div class="suggest" id="suggestList" hidden></div>
   <div class="search-hist" id="searchHist" hidden></div>
+  <div class="search-filters" id="searchFilters" hidden></div>
   <div class="hot-words" id="hotWords"></div>
   <div class="grid" id="searchGrid"></div>
   <div class="list-status" id="searchStatus"></div>
@@ -110,6 +112,20 @@
     <h2 id="recommendTitle">相关推荐</h2>
   </div>
   <div class="recommend-grid" id="recommendGrid" hidden></div>
+</section>
+
+<!-- 演员主页：openhongguo SDK person + personWorks -->
+<section class="page" id="personPage" hidden>
+  <div class="search-bar">
+    <button class="icon-btn" id="personBack" aria-label="返回">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M15 5 8 12l7 7" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="person-title" id="personName">演员主页</div>
+  </div>
+  <div class="person-head" id="personHead"></div>
+  <div class="section-head"><h2>参演作品</h2><span class="muted" id="personCount"></span></div>
+  <div class="grid" id="personGrid"></div>
+  <div class="list-status" id="personStatus"></div>
 </section>
 
 <!-- 播放器 -->

@@ -55,13 +55,87 @@ const METHODS = [
 ];
 // AsyncGenerator 方法（翻页遍历）需单独包装成 async generator，不能当普通 Promise 方法。
 const GENERATORS = ['discoverAll', 'searchAll'];
+
+/* ---------------- 内存缓存 ----------------
+ * SDK 每次调用都要打上游（签名 + JSON 解析，单趟 0.7~1.5s）。榜单/分类/详情
+ * 这类数据分钟级不变，缓存起来可让「再次加载」秒回。
+ * - 不缓存 resolvePlayback：contentKey 与设备强绑定且服务端限流，每次必须现取。
+ * - 同 key 并发去重：首页同时拉三个频道时，重复的 getSeriesBatch 只打一次。
+ */
+const CACHE_TTL = {
+  hotSearch: 10 * 60e3, searchCues: 10 * 60e3, rankGroups: 10 * 60e3,
+  shortFilterPanel: 10 * 60e3, categories: 10 * 60e3, categoryLanding: 5 * 60e3,
+  shortRank: 3 * 60e3, rankRows: 3 * 60e3, ranking: 3 * 60e3,
+  shortFilter: 3 * 60e3, discover: 3 * 60e3, search: 2 * 60e3, suggest: 2 * 60e3,
+  newReleases: 5 * 60e3,
+  getSeries: 5 * 60e3, getSeriesBatch: 5 * 60e3, listEpisodes: 5 * 60e3,
+  seasons: 5 * 60e3, getAlbum: 5 * 60e3, seriesRecommend: 5 * 60e3,
+  person: 5 * 60e3, personWorks: 5 * 60e3, listDanmaku: 5 * 60e3,
+};
+const NO_CACHE = new Set(['resolvePlayback', 'resetDevice']);
+const cache = new Map();        // key -> { at, value }
+const inflight = new Map();     // key -> Promise
+let cacheHits = 0;
+let cacheMisses = 0;
+
+function cacheKey(m, args) {
+  try { return m + ':' + JSON.stringify(args); } catch (e) { return m + ':' + String(args); }
+}
+
+function cacheGet(key, ttl) {
+  const hit = cache.get(key);
+  if (hit !== null && hit !== undefined && Date.now() - hit.at < ttl) {
+    cacheHits++;
+    return hit.value;
+  }
+  if (hit !== null && hit !== undefined) cache.delete(key); // 过期即清
+  return undefined;
+}
+
+function cachePut(key, value) {
+  cache.set(key, { at: Date.now(), value });
+  // 上限 500 条，超出淘汰最旧
+  if (cache.size > 500) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+}
+
 const api = {};
 for (const m of METHODS) {
   api[m] = async (...args) => {
-    const c = await getClient();
-    return c[m](...args);
+    const ttl = CACHE_TTL[m];
+    if (!ttl || NO_CACHE.has(m)) {
+      const c = await getClient();
+      return c[m](...args);
+    }
+    const key = cacheKey(m, args);
+    const hit = cacheGet(key, ttl);
+    if (hit !== undefined) return hit;
+    // 同 key 正在飞行的请求直接复用
+    const flying = inflight.get(key);
+    if (flying !== undefined) return flying;
+    cacheMisses++;
+    const task = (async () => {
+      const c = await getClient();
+      const value = await c[m](...args);
+      cachePut(key, value);
+      return value;
+    })();
+    inflight.set(key, task);
+    try { return await task; } finally { inflight.delete(key); }
   };
 }
+
+/** 缓存统计（供 /health 与验证用）。 */
+function cacheStats() {
+  return { entries: cache.size, hits: cacheHits, misses: cacheMisses,
+    hitRate: cacheHits + cacheMisses > 0
+      ? Math.round(cacheHits * 100 / (cacheHits + cacheMisses)) + '%' : '0%' };
+}
+
+/** 清空缓存（内置更新后或手动刷新用）。 */
+function cacheClear() { cache.clear(); cacheHits = 0; cacheMisses = 0; }
 for (const m of GENERATORS) {
   api[m] = async function* (...args) {
     const c = await getClient();
@@ -108,6 +182,8 @@ module.exports = Object.assign({}, api, {
   searchFilters,
   ready,
   resetDevice,
+  cacheStats,
+  cacheClear,
   profilePath: PROFILE,
   methods: METHODS.concat(GENERATORS),
 });
