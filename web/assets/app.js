@@ -468,9 +468,7 @@
       <h2>继续观看</h2>
       <div class="mini-list" id="historyList">${rows.length ? '' : '<div class="empty">还没有观看记录</div>'}</div>
       <h2>我的收藏</h2>
-      <div class="mini-list" id="favList">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>
-      <h2>弹幕设置</h2>
-      <div class="settings-card" id="danmakuSettings"></div>`;
+      <div class="mini-list" id="favList">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>`;
     const reserveList = wrap.querySelector('#reserveList');
     const historyList = wrap.querySelector('#historyList');
     const favList = wrap.querySelector('#favList');
@@ -478,7 +476,6 @@
     rows.forEach((r) => historyList.appendChild(miniRow(r, true)));
     favs.forEach((r) => favList.appendChild(miniRow(r, false)));
     grid.appendChild(wrap);
-    renderDanmakuSettings();
     const cc = $('clearCacheBtn');
     if (cc) {
       cc.addEventListener('click', async () => {
@@ -2341,23 +2338,18 @@
     toast('弹幕字号：' + ({ s: '小', m: '中', l: '大' }[dm.size]));
   }
 
-  /** 拖动透明度滑轨时实时生效：不重建菜单（否则会打断拖动），只改状态+已上屏弹幕+另一处滑块。 */
+  /** 拖动透明度滑轨时实时生效：不重建菜单（否则会打断拖动），只改状态+已上屏弹幕。 */
   function setDmOpacityLive(value) {
     const v = Number(value);
     dm.opacity = Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.9;
     store.set('mr.dmOpacity', dm.opacity);
     const layer = $('dmLayer');
     if (layer) for (const n of layer.children) n.style.opacity = String(dm.opacity);
-    const sr = document.querySelector('#danmakuSettings .setting-range input');
-    if (sr) sr.value = String(Math.round(dm.opacity * 100));
-    const sv = document.querySelector('#danmakuSettings .setting-range .val');
-    if (sv) sv.textContent = Math.round(dm.opacity * 100) + '%';
   }
 
   function setDmOpacity(value) {
     setDmOpacityLive(value);
     renderToolsMenu();
-    renderDanmakuSettings();
     toast('弹幕透明度：' + Math.round(dm.opacity * 100) + '%');
   }
 
@@ -2367,7 +2359,6 @@
     dm.lanes = [];                       // 行数变了，重建轨道避免旧状态串位
     store.set('mr.dmRows', dm.rows);
     renderToolsMenu();
-    renderDanmakuSettings();
     toast('弹幕行数：' + dm.rows + ' 行');
   }
 
@@ -2375,57 +2366,7 @@
     dm.speed = DM_SPEED_MS[value] ? value : 'medium';
     store.set('mr.dmSpeed', dm.speed);
     renderToolsMenu();
-    renderDanmakuSettings();
     toast('弹幕速度：' + ({ fast: '快', medium: '中', slow: '慢' }[dm.speed]));
-  }
-
-  /* 「我的 > 弹幕设置」：与播放器工具菜单共用同一份 dm 状态，改一处全局生效。
-     设置页不在 DOM（未进「我的」页）时安全返回，setDm* 调用不会报错。 */
-  function renderDanmakuSettings() {
-    const host = $('danmakuSettings');
-    if (!host) return;
-    const row = (label, hint, control) => {
-      const r = el('div', 'setting-row');
-      const left = el('div', 'label');
-      left.innerHTML = esc(label) + (hint ? `<div class="hint">${esc(hint)}</div>` : '');
-      r.appendChild(left);
-      r.appendChild(control);
-      return r;
-    };
-    const seg = (options, current, onPick) => {
-      const box = el('div', 'setting-seg');
-      options.forEach(([v, label]) => {
-        const b = el('button', String(v) === String(current) ? 'on' : '', label);
-        b.addEventListener('click', () => onPick(v));
-        box.appendChild(b);
-      });
-      return box;
-    };
-    host.innerHTML = '';
-    // 显示弹幕开关
-    const sw = el('button', 'setting-switch' + (dm.on ? ' on' : ''));
-    sw.title = dm.on ? '已开启' : '已关闭';
-    sw.addEventListener('click', () => setDanmaku(!dm.on));
-    host.appendChild(row('显示弹幕', '播放器内叠加显示弹幕', sw));
-    // 字号
-    host.appendChild(row('弹幕字号', null,
-      seg([['s', '小'], ['m', '中'], ['l', '大']], dm.size, (v) => setDmSize(v))));
-    // 同时显示行数
-    host.appendChild(row('同时显示行数', '密集时最多占用的轨道数',
-      seg(DM_ROWS_OPTIONS.map((n) => [n, n + ' 行']), dm.rows, (v) => setDmRows(v))));
-    // 滚动速度
-    host.appendChild(row('滚动速度', null,
-      seg([['fast', '快'], ['medium', '中'], ['slow', '慢']], dm.speed, (v) => setDmSpeed(v))));
-    // 不透明度（滑块）
-    const rngWrap = el('div', 'setting-range');
-    const rng = el('input');
-    rng.type = 'range'; rng.min = '10'; rng.max = '100'; rng.step = '5';
-    rng.value = String(Math.round(dm.opacity * 100));
-    const val = el('span', 'val', Math.round(dm.opacity * 100) + '%');
-    rng.addEventListener('input', () => { val.textContent = rng.value + '%'; });
-    rng.addEventListener('change', () => setDmOpacity(Number(rng.value) / 100));
-    rngWrap.appendChild(rng); rngWrap.appendChild(val);
-    host.appendChild(row('不透明度', null, rngWrap));
   }
 
   requestAnimationFrame(dmTick);
