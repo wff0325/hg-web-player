@@ -1,4 +1,4 @@
 {
-  "version": "v2.3.4",
-  "note": "详情页按红果桌面端参考图重做排版与交互：1) 顶部封面暖色光晕背景、热度🔥/评分⭐/彩色分类标签（8 色渐变）、红色渐变播放按钮，「共X集」为淡暖色文字（不是突兀色块），简介可展开；2) 播放按钮有观看记录时显示「继续观看第 N 集」；3) 选集每 50 集分卷（第1-50集…），自动定位到观看记录所在分卷；4) 全季移到选集之后，卡片文字单行截断不再挤压；5) 新增热评区（后端 /comments 复用官方 commentapi 签名，按点赞排序，4 列卡片）；6)「短剧推荐」按当前剧所属内容类别（真人剧/漫剧/AI剧/全部）取对应热播榜热度最高的剧，入口 tab 记入 localStorage(mr.content.<sid>)，实测漫剧类推「满院亲戚」、真人剧类推「母凭子贵」，不再用 SDK seriesRecommend 的无关泛推荐；7) 观看历史点「继续」直接续播上次集数，全季点某一季只进详情显示选集（不再直接播放）。新增 server/src/service/comments.js + /comments 路由，ohg-data.detail 补 content_type/platform 字段。实测区块左边界对齐(91px)、浏览器逐类别验证通过，自测 232/233（唯一失败=环境无 ffmpeg）。v2.3.3 重打包 WASM、v2.3.2 Retry-After 等均保留。后端常驻 8011。"
+  "version": "v2.3.5",
+  "note": "修复演员主页参演作品为空 + 播放器选集分卷。根因：详情页演员 chip 传的是 actor_id（18位，来自 detail 的 client_extra.actor_ids），而 SDK person/personWorks 需要演员榜的 user_id（16位），直接传 actor_id 只会得到占位名+空作品（旧 wasm 也一样，非重打包回归）。查 Go 源码 sdk/person.go + internal/protocol/parse.go 确认演员榜 ranklist_celebrity 同时下发 actor_id/user_id 两个字段。修复：后端 ohg-data 加 celebrities()（缓存30min）+ /sdk/celebrities 路由，前端 openPerson 先用演员榜把 actor_id→user_id 映射（缓存、带 token 防竞态）再取 person/works。实测：陈杨婷丹 actor_id 7521654909997962558→user_id 3414422309317783→30 部作品（暗夜错轨），浏览器点 chip 验证显示 30 部。播放器内选集抽屉也改为每50集分卷（epSheetPages，自动定位当前集、标题显示第N/5页），与详情页一致。自测 232/233（无 ffmpeg）。v2.3.4 详情页改造等均保留。后端常驻 8011。"
 }

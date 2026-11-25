@@ -578,6 +578,27 @@ async function person(userId) {
     followers: Number(p.followers || 0), likes: Number(p.likes || 0) };
 }
 
+/**
+ * 演员榜：同时给出 actor_id（详情 client_extra.actor_ids 里的值）与 user_id
+ * （person / personWorks 真正需要的账号 id）。详情里拿到的是 actor_id，
+ * 直接传给 personWorks 只会得到占位名和空作品，必须先经此映射。
+ */
+let celebritiesCache = null;
+let celebritiesAt = 0;
+const CELEB_TTL = 30 * 60 * 1000;
+async function celebrities() {
+  if (celebritiesCache && Date.now() - celebritiesAt < CELEB_TTL) return celebritiesCache;
+  const r = await Ohg.shortRank({ content: 'ranklist_celebrity', board: '', cursor: '' });
+  const items = (r.items || []).filter((it) => it && (it.actor_id || it.user_id)).map((it) => ({
+    actor_id: String(it.actor_id || ''), user_id: String(it.user_id || ''),
+    name: String(it.actor || ''), avatar: String(it.avatar_url || ''),
+    score: String(it.score || ''), position: Number(it.position || 0),
+  }));
+  celebritiesCache = { items, count: items.length };
+  celebritiesAt = Date.now();
+  return celebritiesCache;
+}
+
 async function personWorks(userId, cursor, limit) {
   const page = await Ohg.personWorks(String(userId), cursor || '');
   const raw = Array.isArray(page.items) ? page.items : [];
@@ -595,5 +616,5 @@ module.exports = {
   detail, episodes, batch, danmaku, seasons, album, recommend,
   rank, rankMeta, rankGroups, rankRows, ranking,
   filterPanel, shortFilter, catalog, categories, categoryLanding,
-  person, personWorks,
+  person, personWorks, celebrities,
 };

@@ -456,6 +456,8 @@ class Server {
           data = await OhgData.person(String(q.user_id || q.id || '')); break;
         case 'person-works':
           data = await OhgData.personWorks(String(q.user_id || q.id || ''), q.cursor || '', int(q.limit, 30)); break;
+        case 'celebrities':
+          data = await OhgData.celebrities(); break;
         case 'filter-panel':
           data = await OhgData.filterPanel(String(q.genre || 'short_play')); break;
         case 'reset-device':

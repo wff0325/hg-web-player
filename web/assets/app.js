@@ -1101,10 +1101,35 @@
   /* 演员主页：SDK person + personWorks。详情页演员 chip 点进来。 */
   const personPage = $('personPage');
   let personCursor = '', personLoading = false, personId = '';
+  let personToken = 0;
+
+  // 详情页演员 chip 传的是 actor_id（18位），person/personWorks 需要 user_id（16位）。
+  // 用演员榜做 actor_id→user_id 映射（缓存），否则主页永远只显示占位名和空作品。
+  let celebMapPromise = null;
+  async function resolveUserId(id) {
+    if (!/^\d+$/.test(String(id))) return String(id);
+    try {
+      if (!celebMapPromise) {
+        celebMapPromise = api('/sdk/celebrities').then((r) => {
+          const map = new Map();
+          for (const c of ((r && r.items) || [])) {
+            if (c.actor_id) map.set(String(c.actor_id), String(c.user_id || c.actor_id));
+          }
+          return map;
+        }).catch(() => new Map());
+      }
+      const map = await celebMapPromise;
+      return map.get(String(id)) || String(id);
+    } catch (e) { return String(id); }
+  }
 
   async function openPerson(userId, name) {
     if (!userId || !personPage) return;
-    personId = String(userId);
+    const token = ++personToken;
+    // actor_id → user_id（演员榜映射），拿不到就用原 id（小演员可能不在榜上）
+    const realId = await resolveUserId(userId);
+    if (token !== personToken) return;   // 期间又点了别的演员，丢弃这次结果
+    personId = realId;
     detailPage.hidden = true;
     personPage.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -1117,7 +1142,7 @@
     personCursor = '';
     try {
       const p = await api('/sdk/person', { user_id: personId });
-      if (personId !== String(userId)) return;
+      if (token !== personToken) return;
       const tags = (Array.isArray(p.tags) ? p.tags : (p.labels || []))
         .map((t) => `<span class="chip">${esc(typeof t === 'string' ? t : (t.name || t.text || ''))}</span>`).join('');
       $('personHead').innerHTML = `
@@ -1179,6 +1204,7 @@
     $('detailIntro').textContent = seed ? seed.intro : '';
     $('epGrid').innerHTML = '';
     delete $('epGrid').dataset.init;   // 切剧重置分卷定位
+    const esg = $('epSheetGrid'); if (esg) delete esg.dataset.init;
     epPage = 0;
     $('epCount').textContent = '';
     // 相关推荐：切剧先清空，避免闪上一部的推荐
@@ -3188,12 +3214,37 @@
   seek.addEventListener('pointermove', (e) => { if (play.seekDragging) seekTo(e.clientX); });
   seek.addEventListener('pointerup', (e) => { play.seekDragging = false; seekTo(e.clientX); saveProgress(); });
 
-  /* 播放器内选集面板 */
+  /* 播放器内选集面板：与详情页一致，每 50 集分卷，默认定位到正在播的集 */
+  let epSheetPage = 0;
   function renderEpSheet() {
     const grid = $('epSheetGrid');
     if (!grid) return;
     grid.innerHTML = '';
-    detail.episodes.forEach((ep) => {
+    const eps = detail.episodes || [];
+    if (!eps.length) return;
+    const pages = $('epSheetPages');
+    const pageCount = Math.ceil(eps.length / EP_PAGE_SIZE);
+    if (pageCount > 1) {
+      // 首次打开定位到当前播放集所在分卷；之后沿用用户选的分卷
+      if (grid.dataset.init !== '1') {
+        epSheetPage = Math.min(pageCount - 1, Math.floor((play.index - 1) / EP_PAGE_SIZE));
+        grid.dataset.init = '1';
+      }
+      if (epSheetPage >= pageCount) epSheetPage = 0;
+      pages.hidden = false;
+      pages.innerHTML = '';
+      for (let p = 0; p < pageCount; p++) {
+        const from = p * EP_PAGE_SIZE + 1;
+        const to = Math.min((p + 1) * EP_PAGE_SIZE, eps.length);
+        const tab = el('button', 'ep-page' + (p === epSheetPage ? ' on' : ''), `第${from}-${to}集`);
+        tab.addEventListener('click', () => { epSheetPage = p; renderEpSheet(); });
+        pages.appendChild(tab);
+      }
+    } else {
+      pages.hidden = true;
+    }
+    const from = epSheetPage * EP_PAGE_SIZE;
+    eps.slice(from, from + EP_PAGE_SIZE).forEach((ep) => {
       const b = el('button', 'ep' + (ep.index === play.index ? ' playing' : ''), String(ep.index));
       b.addEventListener('click', () => {
         $('epSheet').hidden = true;
@@ -3201,7 +3252,8 @@
       });
       grid.appendChild(b);
     });
-    $('epSheetTitle').textContent = `选集（共 ${detail.episodes.length} 集）`;
+    $('epSheetTitle').textContent = `选集（共 ${eps.length} 集）`;
+    if (pageCount > 1) $('epSheetTitle').textContent += ` · 第${epSheetPage + 1}/${pageCount}页`;
     const cur = grid.querySelector('.ep.playing');
     if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'center' });
   }
