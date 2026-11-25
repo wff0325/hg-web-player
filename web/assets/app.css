@@ -421,40 +421,66 @@ body.hero-bg-view .rank-chip.on { background: var(--accent); color: #fff; }
 /* ---------- 搜索 ---------- */
 .search-bar {
   position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: 8px;
-  padding: calc(8px + var(--safe-top)) 12px 8px;
+  display: flex; align-items: center; gap: 6px;
+  padding: calc(10px + var(--safe-top)) 12px 10px;
   background: var(--bar-solid); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
 }
+/* 胶囊搜索框：图标 + 输入，focus 时整框高亮 */
+.search-field {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+  height: 40px; padding: 0 14px; border-radius: 999px;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-field:focus-within { border-color: rgba(255,45,85,.55); box-shadow: 0 0 0 3px rgba(255,45,85,.12); }
+.search-field .sf-ico { flex: 0 0 auto; color: var(--muted); }
 .search-bar input {
-  flex: 1; height: 40px; border-radius: 12px; border: 1px solid var(--line);
-  background: var(--bg-soft); color: var(--text); padding: 0 12px; font-size: 14px; outline: none;
+  flex: 1; min-width: 0; height: 100%; border: 0; background: transparent;
+  color: var(--text); padding: 0; font-size: 14px; outline: none;
 }
-.search-bar input:focus { border-color: rgba(255,45,85,.55); }
+.search-bar input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.search-bar .text-btn { padding: 8px 4px 8px 8px; }
 .text-btn { border: 0; background: transparent; color: var(--accent); font-size: 14px; font-weight: 700; padding: 8px 10px; cursor: pointer; }
 .text-btn.light { color: rgba(255,255,255,.86); font-weight: 600; font-size: 13px; }
-.hot-words { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 14px 12px; }
-.hot-words .word { padding: 7px 12px; border-radius: 999px; background: var(--bg-soft); color: var(--muted); font-size: 13px; cursor: pointer; }
-/* 热搜榜：官方角标（新剧/预告）就来自这里 */
-.hot-rank { padding: 0 14px 14px; }
-.hot-rank .hr-head { display: flex; align-items: baseline; justify-content: space-between; margin: 4px 0 6px; }
-.hot-rank .hr-head h3 { margin: 0; font-size: 14px; }
-.hot-rank .hr-head span { font-size: 11.5px; color: var(--muted); }
-.hot-rank .hr-item {
-  display: flex; align-items: center; gap: 10px; padding: 9px 2px;
-  border-bottom: 1px solid var(--line); cursor: pointer;
+/* 搜索首页：历史 / 热搜榜 / 猜你想搜，统一卡片化，跟详情页同一套观感 */
+.search-home { padding: 12px 14px 2px; display: flex; flex-direction: column; gap: 12px; }
+.search-home[hidden] { display: none; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 2px 10px; }
+.panel-head h3 { margin: 0; font-size: 14.5px; font-weight: 700; letter-spacing: .2px; }
+.panel-head .ph-sub { font-size: 11.5px; color: var(--muted); }
+.hot-words-wrap, .hot-rank, .search-hist {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 14px;
 }
-.hot-rank .hr-item:last-child { border-bottom: 0; }
-.hot-rank .hr-item:active { opacity: .7; }
-.hot-rank .hr-no { flex: 0 0 auto; width: 18px; text-align: center; font-size: 12.5px; font-weight: 800; color: var(--muted); }
+.hot-words { display: flex; flex-wrap: wrap; gap: 8px; }
+.hot-words .word {
+  padding: 7px 12px; border-radius: 999px; border: 1px solid transparent;
+  background: var(--bg-soft); color: var(--muted); font-size: 13px; cursor: pointer;
+  transition: color .15s, border-color .15s;
+}
+.hot-words .word:hover { color: var(--text); border-color: var(--line); }
+
+/* 热搜榜：官方角标（新剧/预告）就来自这里 */
+.hot-rank .hr-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 2px;
+  border-bottom: 1px solid var(--line); cursor: pointer; transition: opacity .12s;
+}
+.hot-rank .hr-item:last-child { border-bottom: 0; padding-bottom: 2px; }
+.hot-rank .hr-item:active { opacity: .65; }
+.hot-rank .hr-no { flex: 0 0 auto; width: 18px; text-align: center; font-size: 13px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
 .hot-rank .hr-no.top { color: #ff2d55; }
-.hot-rank .hr-t { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hot-rank .hr-t { flex: 1; min-width: 0; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hot-rank .hr-tag {
   flex: 0 0 auto; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 5px;
   background: linear-gradient(135deg,#0aa8a7,#0d7fd6); color: #fff;
 }
-.hot-rank .hr-heat { flex: 0 0 auto; font-size: 11.5px; color: var(--muted); }
+.hot-rank .hr-heat { flex: 0 0 auto; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 搜索筛选 chips：SDK SearchFilter（真人剧/漫剧/AI剧等），跟随明暗主题 */
 .search-filters { display: flex; flex-wrap: nowrap; gap: 8px; padding: 10px 14px 4px; overflow-x: auto; scrollbar-width: none; }
+/* display:flex 会盖掉 UA 的 [hidden]{display:none}，必须显式声明，
+   否则初始态的筛选行永远藏不住（用户反馈的那行多余）。 */
+.search-filters[hidden], .hot-words[hidden], .hot-rank[hidden] { display: none; }
 .search-filters::-webkit-scrollbar { display: none; }
 .search-filters .sf-chip {
   flex: 0 0 auto; padding: 6px 13px; border: 0; border-radius: 999px;
@@ -1007,8 +1033,13 @@ html[data-theme="light"] .card .badge { background: rgba(0,0,0,.55); }
    否则浅色主题下会变成白底白字，整片看不见（2026-11-05 修复） */
 html[data-theme="light"] .ep-grid .ep { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
 html[data-theme="light"] .ep-grid .ep.playing { background: var(--accent); box-shadow: none; }
-html[data-theme="light"] .search-bar input { background: #fff; }
-html[data-theme="light"] .hot-words .word { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
+html[data-theme="light"] .search-field { background: #fff; }
+/* 浅色下卡片本身是白底，胶囊用浅灰底才分得开 */
+html[data-theme="light"] .hot-words .word,
+html[data-theme="light"] .sh-chips .word { background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); }
+html[data-theme="light"] .search-home .hot-words-wrap,
+html[data-theme="light"] .search-home .hot-rank,
+html[data-theme="light"] .search-home .search-hist { box-shadow: 0 1px 3px rgba(16,24,40,.04); }
 html[data-theme="light"] .mini-row { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
 html[data-theme="light"] .skeleton { box-shadow: inset 0 0 0 1px var(--line); }
 
@@ -1103,11 +1134,11 @@ main { max-width: 1440px; margin: 0 auto; position: relative; }
 .sg-go { flex: 0 0 auto; color: var(--muted); font-size: 18px; line-height: 1; }
 .sg-empty { padding: 14px; text-align: center; color: var(--muted); font-size: 13px; }
 
-.search-hist { padding: 2px 14px 4px; }
+.search-hist { padding: 14px; }
 .search-hist[hidden] { display: none; }
-.sh-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.sh-title { font-size: 12.5px; font-weight: 600; color: var(--muted); }
-.sh-clear { border: 0; background: transparent; color: var(--muted); font-size: 12.5px; cursor: pointer; padding: 2px 4px; }
+.sh-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.sh-title { font-size: 14.5px; font-weight: 700; color: var(--text); }
+.sh-clear { border: 0; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
 .sh-clear:hover { color: var(--accent); }
 .sh-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .sh-chips .word {

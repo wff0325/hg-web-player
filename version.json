@@ -1,4 +1,4 @@
 {
-  "version": "v2.3.7",
-  "note": "接入 Go SDK 官方角标/榜单变动 + 演员主页重排。查 Go 源码确认角标字段：sdk/model/catalog.go 的 HotItem.Tag（注释「Tag 是角标，例如新剧」），原始字段 tag_info.text（internal/protocol/parse.go:1517）；榜单另有 RankItem.Position（名次）、Promoted（平台推荐行）、Change（升降：0新上榜/1上升/2下降/3不变）。实测：热搜榜 tag=新剧、预约榜 tag=预告，演员榜有 change（陈杨婷丹 第1名↑2）。后端透传：toRankItem 补 tag/change/promoted，celebrities 补 change，hotSearch 新增 rows 数组保留角标（items 仍为字符串兼容旧调用）。前端：normalize 收 tag/change/promoted；卡片封面左下角显示「新剧/预告」青蓝角标，平台推荐行用紫色「平台推荐」替代热度；演员主页头部新增「演员榜第 N 名 ↑/↓」；搜索页新增热搜榜列表（名次+剧名+新剧角标+热度，点击进详情）。演员主页重排：108px 圆头像+暖色光晕+24px 名字+粉丝/获赞分栏+简介两行收起可展开；头像修复：person 接口返回 .heic 浏览器解不了，改用演员榜 .jpeg 兜底。TOP 角标仍按场景：首页/短剧推荐隐藏，搜索/演员作品按列表序号补 TOP。"
+  "version": "v2.3.8",
+  "note": "搜索页重排 + 修复搜索卡死/封面空白。1) 去掉「全部/真人剧/漫剧/AI剧/影视剧/未看过」筛选行（用户反馈多余）：根因是 .search-filters{display:flex} 盖掉了 UA 的 [hidden]{display:none}，所以 hidden=true 根本不生效；已删除该行 DOM 并补 .search-filters[hidden]{display:none} 规则。2) 搜索卡死根因：上游 searchAll 翻页极慢（实测 10条3.6s / 20条7.3s / 30条11.2s，第4页单页20s，40条共31.5s），前端一直停在「搜索中…」；已把 maxPages 从 20 收到 2、limit 40→20，实测 10.3s 返回。3) 封面空白：搜索结果混入话题/UGC 条目（无 series_id、补不到封面），已过滤 x.series_id && x.cover；另 hideSuggest 之前只清 DOM 不取消防抖和在飞请求，导致联想下拉在搜索后重新弹出盖住结果（表现为「封面没显示」），现在会 clearTimeout + abort + seq 失效。4) 搜索页重排：胶囊搜索框（放大镜图标+focus 高亮）、搜索历史/热搜榜/猜你想搜三块统一卡片化、热搜榜标题右侧「实时」右对齐、浅色主题下胶囊改用浅灰底避免与白卡同色。验证：搜索「持械入宋」结果全部有封面，无联想遮挡、无筛选行。"
 }

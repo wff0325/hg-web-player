@@ -67,14 +67,22 @@
     <button class="icon-btn" id="searchBack" aria-label="返回">
       <svg viewBox="0 0 24 24" width="20" height="20"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
-    <input id="searchInput" type="search" placeholder="搜索剧名、题材、标签" autocomplete="off">
+    <div class="search-field">
+      <svg class="sf-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16.6 16.6 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="searchInput" type="search" placeholder="搜索剧名、题材、标签" autocomplete="off">
+    </div>
     <button class="text-btn" id="searchGo">搜索</button>
   </div>
   <div class="suggest" id="suggestList" hidden></div>
-  <div class="search-hist" id="searchHist" hidden></div>
-  <div class="search-filters" id="searchFilters" hidden></div>
-  <div class="hot-words" id="hotWords"></div>
-  <div class="hot-rank" id="hotRank" hidden></div>
+  <!-- 搜索首页：历史 + 热搜榜 + 猜你想搜，搜索后整体收起 -->
+  <div class="search-home" id="searchHome">
+    <div class="search-hist" id="searchHist" hidden></div>
+    <div class="hot-rank" id="hotRank" hidden></div>
+    <div class="hot-words-wrap">
+      <div class="panel-head"><h3>猜你想搜</h3></div>
+      <div class="hot-words" id="hotWords"></div>
+    </div>
+  </div>
   <div class="grid" id="searchGrid"></div>
   <div class="list-status" id="searchStatus"></div>
 </section>

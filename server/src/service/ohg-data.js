@@ -112,17 +112,22 @@ async function allEpisodes(seriesId, limit) {
 
 /** 搜索分页：用 searchAll 去重翻页，凑够 limit。 */
 async function searchItems(query, limit, filters) {
-  const cap = limit > 0 ? limit : 30;
+  const cap = limit > 0 ? limit : 20;
   const out = [];
   const opts = {};
   if (Array.isArray(filters) && filters.length > 0) opts.filters = filters;
   const raw = [];
-  for await (const s of Ohg.searchAll(String(query), opts, { maxPages: 20 })) {
+  // 上游搜索翻页极慢（实测 10条3.6s / 20条7.3s / 30条11.2s，第4页单页就要20s，
+  // 40条要31.5s），用户会以为搜索卡死。限制 2 页（约20条）把首屏压到 7s 内。
+  for await (const s of Ohg.searchAll(String(query), opts, { maxPages: 2 })) {
     raw.push(s);
     if (raw.length >= cap) break;
   }
   // SDK 的搜索结果不带封面/标签/热度，用 getSeriesBatch 一次批量补齐（避免逐部 getSeries）。
-  return enrichByBatch(raw);
+  const items = await enrichByBatch(raw);
+  // 搜索结果会混入话题/UGC 条目（无 series_id、补不到封面），它们不可播放，
+  // 直接过滤，否则前端会出现一整片空白封面的卡片。
+  return items.filter((x) => x && x.series_id && x.cover);
 }
 
 /**

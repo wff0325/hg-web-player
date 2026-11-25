@@ -881,7 +881,9 @@
     ['ai', 'AI剧'], ['film', '影视剧'], ['new', '未看过'],
   ];
   let searchFilter = '';
-  function renderSearchFilters() {
+  // show=false 时只重建不显示：搜索页初始状态不该出现这排筛选，
+  // 只有真正搜出结果后才展示（用户反馈「全部/真人剧/漫剧那行多余」）。
+  function renderSearchFilters(show) {
     const box = $('searchFilters');
     if (!box) return;
     box.innerHTML = '';
@@ -890,12 +892,12 @@
       b.addEventListener('click', () => {
         if (searchFilter === val) return;
         searchFilter = val;
-        renderSearchFilters();
+        renderSearchFilters(true);
         if ($('searchInput').value.trim()) doSearch();
       });
       box.appendChild(b);
     });
-    box.hidden = false;
+    box.hidden = !show;
   }
 
   /* openhongguo SDK 搜索增强：真实热搜/联想/提示词。接口失败时静默回退到本地默认。 */
@@ -920,7 +922,7 @@
       const rows = (r && r.boards && r.boards[0] && r.boards[0].rows) || [];
       const hr = $('hotRank');
       if (hr && rows.length) {
-        hr.innerHTML = `<div class="hr-head"><h3>热搜榜</h3><span>实时</span></div>`
+        hr.innerHTML = `<div class="panel-head"><h3>热搜榜</h3><span class="ph-sub">实时</span></div>`
           + rows.slice(0, 10).map((x, i) => `
             <div class="hr-item" data-id="${esc(x.series_id || '')}" data-title="${esc(x.title)}">
               <span class="hr-no${i < 3 ? ' top' : ''}">${i + 1}</span>
@@ -999,7 +1001,13 @@
   let suggestAbort = null;
 
   function hideSuggest() {
+    // 必须同时取消防抖定时器和在飞请求：只清 DOM 的话，
+    // 防抖到点后联想会再次弹出来盖住搜索结果（表现为「封面没显示」）。
+    if (suggestTimer) { clearTimeout(suggestTimer); suggestTimer = null; }
+    if (suggestAbort) { try { suggestAbort.abort(); } catch (e) { /* 已结束 */ } suggestAbort = null; }
+    suggestSeq += 1;   // 让在飞的响应回来时判定为过期，不再渲染
     const box = $('suggestList');
+    if (!box) return;
     box.hidden = true;
     box.innerHTML = '';
   }
@@ -1089,11 +1097,19 @@
 
   function onSearchInput() {
     const q = $('searchInput').value.trim();
+    const home = $('searchHome');
     const hasHist = getSearchHist().length > 0;
+    // 输入为空：回到搜索首页（历史/热搜榜/猜你想搜），收起结果与筛选
+    if (home) home.hidden = q !== '';
     $('searchHist').hidden = q !== '' || !hasHist;
-    $('hotWords').hidden = q !== '';
     if (suggestTimer) clearTimeout(suggestTimer);
-    if (!q) { hideSuggest(); return; }
+    if (!q) {
+      hideSuggest();
+      searchGrid.innerHTML = '';
+      searchStatus.textContent = '';
+      renderSearchFilters(false);
+      return;
+    }
     suggestTimer = setTimeout(() => fetchSuggest(q), 260);
   }
 
@@ -1111,13 +1127,13 @@
     }
     loadHotWords(); // 异步替换为 SDK 真实热搜（失败则用本地默认）
     loadSearchCues(); // SDK 搜索框提示词轮播
-    renderSearchFilters(); // SDK 筛选 chips
+    // 初始态不显示筛选行：没有关键词时筛选没有意义（用户反馈多余）
+    renderSearchFilters(false);
     hideSuggest();
     $('searchInput').value = '';
     renderSearchHist();
-    $('hotWords').hidden = false;
-    const hr = $('hotRank');
-    if (hr && hr.innerHTML) hr.hidden = false;
+    const home = $('searchHome');
+    if (home) home.hidden = false;
     setTimeout(() => $('searchInput').focus(), 120);
   }
 
@@ -1127,14 +1143,14 @@
     hideSuggest();
     pushSearchHist(q);
     renderSearchHist();
-    $('searchHist').hidden = true;
-    $('hotWords').hidden = true;
-    $('hotRank').hidden = true;
+    const home = $('searchHome');
+    if (home) home.hidden = true;
     searchGrid.innerHTML = '';
     searchStatus.innerHTML = '搜索中…';
-    renderSearchFilters();
+    renderSearchFilters(true);
     try {
-      const params = { q, limit: 40 };
+      // 上游翻页慢，20 条足够首屏；要更多靠后续再搜
+      const params = { q, limit: 20 };
       if (searchFilter) params.filter = searchFilter;
       const r = await api('/search', params);
       const items = r.results || [];
