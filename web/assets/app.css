@@ -447,18 +447,54 @@ body.hero-bg-view .rank-chip.on { background: var(--accent); color: #fff; }
   background: rgba(0,0,0,.5); color: #fff; display: grid; place-items: center; backdrop-filter: blur(8px);
 }
 .detail-hero { position: relative; padding: calc(56px + var(--safe-top)) 16px 16px; overflow: hidden; }
+/* 参考红果桌面端：封面放大模糊成暖色光晕，叠一层暖色渐变让顶区有氛围感 */
 .hero-bg {
   position: absolute; inset: -30px; background-size: cover; background-position: center;
-  filter: blur(28px) saturate(1.3) brightness(.42); transform: scale(1.15);
+  filter: blur(34px) saturate(1.75) brightness(.62); transform: scale(1.2);
 }
-.hero-bg::after { content: ''; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(11,11,15,.25), var(--bg) 88%); }
+.hero-bg::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(120% 90% at 78% 0%, rgba(255,138,76,.24), transparent 62%),
+    linear-gradient(180deg, rgba(11,11,15,.10) 0%, rgba(11,11,15,.42) 62%, var(--bg) 96%);
+}
 .hero-inner { position: relative; display: flex; gap: 14px; }
-.hero-inner img { width: 108px; aspect-ratio: 3/4; object-fit: cover; border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+.hero-inner img {
+  width: 108px; aspect-ratio: 3/4; object-fit: cover; border-radius: 12px;
+  box-shadow: 0 14px 36px rgba(0,0,0,.62); border: 1px solid rgba(255,255,255,.12);
+}
 .hero-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.hero-meta h1 { margin: 2px 0 0; font-size: 19px; line-height: 1.3; font-weight: 800; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hero-meta h1 {
+  margin: 2px 0 0; font-size: 20px; line-height: 1.3; font-weight: 800;
+  text-shadow: 0 2px 12px rgba(0,0,0,.55);
+}
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .chip { font-size: 11.5px; color: var(--muted); background: var(--active); padding: 4px 8px; border-radius: 7px; }
 .chip.accent { color: #ffb3c1; background: var(--accent-soft); }
+/* 热度/评分/集数/播放：暖色系渐变信息标签 */
+.chip.hot { color: #fff; background: linear-gradient(135deg,#ff7a18,#ff3d3d); font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.chip.score { color: #7a4a00; background: linear-gradient(135deg,#ffe08a,#ffc84a); font-weight: 700; }
+/* 集数/播放数：参考图是淡暖色文字，不要大色块 */
+.chip.ep { color: #ffb3c1; background: transparent; padding: 4px 2px; font-weight: 700; }
+html[data-theme="light"] .chip.ep { color: #e11d48; }
+.chip.play { color: var(--muted); background: transparent; padding: 4px 2px; }
+/* 分类标签：多彩胶囊，参考桌面端的多色标签墙 */
+.chip-cats { display: flex; flex-wrap: wrap; gap: 5px; width: 100%; }
+.chip.cat { color: #fff; font-weight: 600; padding: 3px 9px; border-radius: 6px; font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,.28); }
+.chip.cat.c金 { background: linear-gradient(135deg,#f7b733,#fc4a1a); }
+.chip.cat.c玫 { background: linear-gradient(135deg,#ff416c,#ff4b2b); }
+.chip.cat.c青 { background: linear-gradient(135deg,#11998e,#38ef7d); }
+.chip.cat.c紫 { background: linear-gradient(135deg,#7f00ff,#e100ff); }
+.chip.cat.c蓝 { background: linear-gradient(135deg,#36d1dc,#5b86e5); }
+.chip.cat.c橙 { background: linear-gradient(135deg,#ff9a44,#fc6076); }
+.chip.cat.c绿 { background: linear-gradient(135deg,#0ba360,#3cba92); }
+.chip.cat.c粉 { background: linear-gradient(135deg,#ff6a88,#ff99ac); }
+html[data-theme="light"] .hero-bg::after {
+  background:
+    radial-gradient(120% 90% at 78% 0%, rgba(255,138,76,.16), transparent 62%),
+    linear-gradient(180deg, rgba(245,246,248,.35) 0%, rgba(245,246,248,.72) 62%, var(--bg) 96%);
+}
+html[data-theme="light"] .hero-meta h1 { text-shadow: none; }
 .actor-chip { border: 0; cursor: pointer; white-space: nowrap; }
 .actor-chip:hover { color: var(--accent); }
 
@@ -474,13 +510,19 @@ body.hero-bg-view .rank-chip.on { background: var(--accent); color: #fff; }
 .ph-info p { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
 .ph-stat { margin-top: 8px; font-size: 12px; color: var(--muted); }
 #personPage .grid { padding: 0 12px; }
-.hero-actions { display: flex; gap: 8px; margin-top: auto; }
+.hero-actions { display: flex; gap: 8px; margin-top: auto; flex-wrap: wrap; }
 .btn { border: 0; cursor: pointer; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; font-weight: 700; }
-.btn.primary { background: var(--accent); color: #fff; }
+.btn.primary {
+  background: linear-gradient(135deg,#ff4d6d,#ff2d55 55%,#ff5e3a);
+  color: #fff; box-shadow: 0 6px 18px rgba(255,45,85,.34);
+  transition: transform .12s, box-shadow .12s;
+}
+.btn.primary:active { transform: scale(.97); box-shadow: 0 3px 10px rgba(255,45,85,.3); }
 .btn.ghost { background: var(--active); color: var(--text); }
 .btn.ghost.on { background: rgba(255,45,85,.2); color: #ff9db0; }
+.intro-toggle { padding: 5px 10px; font-size: 11.5px; }
 .intro { margin: 4px 16px 0; color: var(--muted); font-size: 13px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.intro.open { -webkit-line-clamp: unset; }
+.intro.open { -webkit-line-clamp: unset; display: block; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; padding: 20px 16px 10px; }
 .section-head h2 { margin: 0; font-size: 15px; }
 .muted { color: var(--muted); font-size: 12.5px; }
@@ -548,14 +590,48 @@ body.hero-bg-view .rank-chip.on { background: var(--accent); color: #fff; }
   backdrop-filter: blur(4px); text-shadow: 0 1px 3px rgba(0,0,0,.45);
 }
 .season-list .season-item .si-t {
-  margin-top: 6px; font-size: 12.5px; font-weight: 600; line-height: 1.3;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  margin-top: 6px; font-size: 12px; font-weight: 600; line-height: 1.35;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.season-list .season-item .si-m { margin-top: 3px; font-size: 11px; color: var(--muted); }
+.season-list .season-item .si-m {
+  margin-top: 3px; font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .season-list .season-item.now .si-m { color: var(--accent); }
 
+/* 选集分卷：每 50 集一页，参考桌面端「第1-50集」胶囊标签 */
+.ep-pages { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 10px; }
+.ep-pages[hidden] { display: none !important; }
+.ep-page {
+  border: 1px solid var(--line); cursor: pointer; padding: 5px 12px; border-radius: 999px;
+  background: var(--bg-soft); color: var(--muted); font-size: 12px; font-weight: 600;
+}
+.ep-page.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .ep-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 0 16px; }
 @media (min-width: 640px) { .ep-grid { grid-template-columns: repeat(10, 1fr); } }
+/* 热评：头像 + 昵称 + 日期 + 文本 + 点赞，参考桌面端评论区 */
+.comments-head { padding-top: 14px; }
+.comment-list { padding: 0 16px 6px; display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 760px) { .comment-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1080px) { .comment-list { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.comment-list[hidden] { display: none !important; }
+.comment-item {
+  display: flex; gap: 10px; padding: 11px 12px; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--line);
+}
+.ci-avatar {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 14px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg,#ff8a5b,#ff4d6d);
+}
+.comment-item:nth-child(3n+2) .ci-avatar { background: linear-gradient(135deg,#5b86e5,#36d1dc); }
+.comment-item:nth-child(3n+3) .ci-avatar { background: linear-gradient(135deg,#7f00ff,#e100ff); }
+.ci-body { flex: 1; min-width: 0; }
+.ci-head { display: flex; align-items: baseline; gap: 8px; }
+.ci-name { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.ci-date { font-size: 11px; color: var(--muted); }
+.ci-text { margin-top: 3px; font-size: 13px; line-height: 1.55; color: var(--text); word-break: break-word; }
+.ci-like { margin-top: 6px; font-size: 11.5px; color: var(--accent); }
 /* 相关推荐：与首页卡片同款网格，用 SDK seriesRecommend 数据 */
 .recommend-head { padding-bottom: 6px; }
 .recommend-grid {
@@ -864,7 +940,7 @@ main { max-width: 1440px; margin: 0 auto; position: relative; }
 @media (min-width: 520px) and (max-width: 1023px) {
   main { padding: 0 20px; }
   .detail-hero { padding-left: 28px; padding-right: 28px; }
-  .intro, .section-head, .ep-grid { padding-left: 28px; padding-right: 28px; }
+  .intro, .section-head, .ep-grid, .ep-pages, .comment-list, .recommend-grid { padding-left: 28px; padding-right: 28px; }
   .season-hrow { padding-left: 28px; padding-right: 28px; }
   .ep-grid { grid-template-columns: repeat(8, 1fr); }
   .detail-hero .hero-inner img { width: 132px; }
@@ -882,7 +958,7 @@ main { max-width: 1440px; margin: 0 auto; position: relative; }
   .detail-hero .hero-inner { gap: 22px; }
   .detail-hero .hero-inner img { width: 168px; border-radius: 16px; }
   .hero-meta h1 { font-size: 26px; }
-  .intro, .section-head, .ep-grid, .season-list { max-width: 1080px; margin-left: auto; margin-right: auto; }
+  .intro, .section-head, .ep-grid, .ep-pages, .comment-list, .recommend-grid, .season-list { max-width: 1080px; margin-left: auto; margin-right: auto; }
   .ep-grid { grid-template-columns: repeat(12, 1fr); }
   .mine { margin: 0 auto; }
   .back-fab { left: calc(50% - 560px); }
@@ -894,7 +970,7 @@ main { max-width: 1440px; margin: 0 auto; position: relative; }
   .brand-mark { width: 22px; height: 22px; }
   .detail-hero { padding-left: 14px; padding-right: 14px; }
   .intro { margin-left: 14px; margin-right: 14px; }
-  .section-head, .ep-grid { padding-left: 14px; padding-right: 14px; }
+  .section-head, .ep-grid, .ep-pages, .comment-list, .recommend-grid { padding-left: 14px; padding-right: 14px; }
   .season-hrow { padding-left: 14px; padding-right: 14px; }
 }
 

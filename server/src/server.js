@@ -23,6 +23,7 @@ const Download = require('./service/download');
 const Res = require('./service/res');
 const Stream = require('./service/stream');
 const Danmaku = require('./service/danmaku');
+const Comments = require('./service/comments');
 const OhgData = require('./service/ohg-data');
 const Ohg = require('./service/ohg');
 const WebSync = require('./service/web-sync');
@@ -834,6 +835,23 @@ class Server {
       // 数据源：openhongguo SDK listDanmaku（官方时间轴弹幕）。契约不变。
       const r = await OhgData.danmaku(sid, vid,
         Number.isInteger(limit) && limit > 0 ? limit : 1200);
+      Res.json(req, res, 200, r);
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/comments') {
+      const sid = String(q.series_id === undefined ? '' : q.series_id).trim();
+      const vid = String(q.vid === undefined ? '' : q.vid).trim();
+      if (sid === '' || vid === '') {
+        Res.fail(req, res, 400, '缺少 series_id 或 vid');
+        return;
+      }
+      const limit = Number(q.limit);
+      const r = await Comments.fetchHotComments({
+        seriesId: sid, vid,
+        bookId: q.book_id ? String(q.book_id) : sid,
+        limit: Number.isInteger(limit) && limit > 0 ? limit : 6,
+      });
       Res.json(req, res, 200, r);
       return;
     }

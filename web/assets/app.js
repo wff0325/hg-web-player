@@ -59,6 +59,13 @@
     const m = Math.floor(s / 60), r = s % 60;
     return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
   };
+  // 详情页分类标签配色：按标签文本稳定映射到 8 种冷暖渐变，参考红果桌面端的多彩标签
+  const CAT_COLORS = ['金', '玫', '青', '紫', '蓝', '橙', '绿', '粉'];
+  const catColor = (s) => {
+    let h = 0;
+    for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0;
+    return CAT_COLORS[h % CAT_COLORS.length];
+  };
   /* 剧名/封面来自上游，插进 innerHTML 前要转义，否则剧名带引号会破坏整行 DOM */
   const esc = (s) => String(s === null || s === undefined ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -620,6 +627,9 @@
         if (d.id && seen.has(d.id)) return;   // 跨页去重
         if (d.id) seen.add(d.id);
         home.items.push(d);
+        // 记住这张卡片来自哪个 tab（全部/真人剧/漫剧/AI剧），详情页「短剧推荐」
+        // 按同一类别推热度最高的剧（用户要求：看漫剧推漫剧、看真人剧推真人剧）。
+        d.content = (VIEW_RANK[home.view] || {}).content || 'all';
         const node = card(it);
         node._card = d;                        // 题材筛选时按 tags 过滤用
         grid.appendChild(node);
@@ -791,7 +801,13 @@
         renderMine();
         return;
       }
-      openDetail(r.id, r);
+      // 观看历史点「继续」直接续播到上次的集数；收藏点「播放」仍进详情选集
+      if (withProgress) {
+        closePlayer();
+        openDetail(r.id, r).then(() => playEpisode(r.index || 1));
+      } else {
+        openDetail(r.id, r);
+      }
     });
     return node;
   }
@@ -1138,6 +1154,10 @@
 
   async function openDetail(seriesId, seed, keepHash) {
     if (!seriesId) return;
+    // 记住入口类别：从哪个 tab 点进来的，「短剧推荐」就按同类推热度最高的
+    if (seed && seed.content) {
+      try { store.set('mr.content.' + seriesId, seed.content); } catch (e) { /* 忽略 */ }
+    }
     document.body.classList.remove('hero-bg-view');
     if (!keepHash) history.replaceState(null, '', '#/d/' + seriesId);
     detail = { seriesId, meta: null, episodes: [] };
@@ -1158,12 +1178,17 @@
     $('detailChips').innerHTML = '';
     $('detailIntro').textContent = seed ? seed.intro : '';
     $('epGrid').innerHTML = '';
+    delete $('epGrid').dataset.init;   // 切剧重置分卷定位
+    epPage = 0;
     $('epCount').textContent = '';
     // 相关推荐：切剧先清空，避免闪上一部的推荐
     recommendToken += 1;
     const rh = $('recommendHead'); const rg = $('recommendGrid');
     if (rh) rh.hidden = true;
     if (rg) { rg.hidden = true; rg.innerHTML = ''; }
+    const ch = $('commentsHead'); const cb = $('commentList');
+    if (ch) ch.hidden = true;
+    if (cb) { cb.hidden = true; cb.innerHTML = ''; }
 
     try {
       let r;
@@ -1180,21 +1205,42 @@
       $('detailCover').src = cover;
       $('heroBg').style.backgroundImage = cover ? `url("${cover}")` : '';
       const statusText = (m.status && !/^全\s*\d+\s*集$/.test(m.status)) ? m.status : '';
-      const chips = [
-        m.episode_cnt ? `${m.episode_cnt} 集` : '',
-        statusText,
-        m.play_cnt ? `${fmtCount(m.play_cnt)} 次播放` : '',
-        ...(m.category || []).slice(0, 3)
-      ].filter(Boolean);
+      // 参考红果桌面端：热度🔥 / 评分⭐ / 彩色分类标签，冷暖渐变错落
+      const metaChips = [];
+      if (m.hot || m.heat) {
+        const hotText = m.hot || fmtCount(m.heat);
+        metaChips.push(`<span class="chip hot">🔥 ${esc(hotText)}热度</span>`);
+      }
+      if (m.score) metaChips.push(`<span class="chip score">⭐ ${esc(m.score)}评分</span>`);
+      if (m.episode_cnt) metaChips.push(`<span class="chip ep">共 ${m.episode_cnt} 集${statusText ? ' · ' + esc(statusText) : ''}</span>`);
+      if (m.play_cnt) metaChips.push(`<span class="chip play">${fmtCount(m.play_cnt)} 次播放</span>`);
+      const cats = (m.category && m.category.length ? m.category : (m.tags || [])).slice(0, 8);
+      const catHtml = cats.map((c) => `<span class="chip cat c${catColor(c)}">${esc(c)}</span>`).join('');
       const celebs = Array.isArray(m.celebrities) ? m.celebrities : [];
-      $('detailChips').innerHTML = chips.map((c, i) => `<span class="chip${i === 0 ? ' accent' : ''}">${c}</span>`).join('')
+      $('detailChips').innerHTML = metaChips.join('')
+        + (cats.length ? `<span class="chip-cats">${catHtml}</span>` : '')
         + celebs.map((c) => `<button class="chip actor-chip" data-uid="${esc(c.user_id)}">${esc(c.name || '演员')} ›</button>`).join('');
       $('detailChips').querySelectorAll('.actor-chip').forEach((b) => {
         b.addEventListener('click', () => openPerson(b.dataset.uid, b.textContent.replace(/\s*›$/, '')));
       });
+      // 简介折叠：内容超过 3 行才显示「展开」按钮
+      const introEl = $('detailIntro');
+      const toggle = $('introToggle');
+      if (toggle) {
+        introEl.classList.remove('open');
+        toggle.hidden = true;
+        // 用 scrollHeight 判断是否真的溢出（line-clamp 3 行）
+        requestAnimationFrame(() => {
+          if (introEl.scrollHeight > introEl.clientHeight + 2) {
+            toggle.hidden = false;
+            toggle.textContent = '简介 ▾';
+          }
+        });
+      }
       $('detailIntro').textContent = m.abstract || (seed && seed.intro) || '暂无简介';
       $('epCount').textContent = `${detail.episodes.length} 集`;
       renderEpisodes();
+      syncPlayBtn();
       syncFavBtn();
       syncReserveBtn();
       probeDetailNext(seriesId);    // 有下一季就把按钮升级成「看第X季 →」
@@ -1206,6 +1252,7 @@
       const likely = detail.episodes.find((ep) => ep.index === (resumeIdx || 1))
         || detail.episodes[0];
       if (likely) prewarm(likely.vid, play.quality);
+      loadComments(seriesId);
       loadRecommend(seriesId);
     } catch (e) {
       $('detailIntro').textContent = '加载失败：' + (e.message || '');
@@ -1214,17 +1261,38 @@
 
   let recommendToken = 0;
 
-  /** 相关推荐：openhongguo SDK seriesRecommend，失败则不显示（不影响详情主体）。 */
+  /**
+   * 短剧推荐：按当前剧所属内容类别（真人剧/漫剧/AI剧/全部）取该类别热播榜，
+   * 显示热度最高的几部，排除当前剧。用户要求：看漫剧推漫剧、看真人剧推真人剧。
+   */
+  const CONTENT_BOARD = {
+    all: 'ranklist_hot_play_sc',
+    series_album: 'series_album_hot_sc',
+    human: 'human_hot_play',
+    comic_series_rank: 'comic_series_hot_play',
+    ai_playlet: 'ai_playlet_hot_play',
+  };
   async function loadRecommend(seriesId) {
     const head = $('recommendHead'); const box = $('recommendGrid');
     if (!head || !box) return;
     const token = ++recommendToken;
+    head.hidden = true; box.hidden = true; box.innerHTML = '';
+    let content = 'all';
+    try { content = store.get('mr.content.' + seriesId, 'all') || 'all'; } catch (e) { /* 忽略 */ }
+    const board = CONTENT_BOARD[content] || 'ranklist_hot_play_sc';
     try {
-      const r = await api('/sdk/recommend', { series_id: seriesId });
+      const r = await api('/rank', { board, limit: 30, content });
       if (token !== recommendToken || detail.seriesId !== seriesId) return;
-      const items = (r && r.items) || [];
+      const all = (r && r.items) || [];
+      if (!all.length) {
+        // 该类别榜单为空时回退全部热播榜，避免空区
+        const fallback = await api('/rank', { board: 'ranklist_hot_play_sc', limit: 30, content: 'all' });
+        if (token !== recommendToken || detail.seriesId !== seriesId) return;
+        all.splice(0, all.length, ...((fallback && fallback.items) || []));
+      }
+      const items = all.filter((it) => String(it.series_id || it.id) !== String(seriesId));
       if (!items.length) return;
-      if (r.title) $('recommendTitle').textContent = r.title;
+      $('recommendTitle').textContent = '短剧推荐';
       box.innerHTML = '';
       items.slice(0, 12).forEach((it) => box.appendChild(card(it)));
       head.hidden = false;
@@ -1232,17 +1300,100 @@
     } catch (e) { /* 推荐非核心，失败静默 */ }
   }
 
+  /** 热评：复用官方 commentapi，按点赞排序展示，失败则整块隐藏。 */
+  let commentsToken = 0;
+  async function loadComments(seriesId) {
+    const head = $('commentsHead'); const box = $('commentList');
+    if (!head || !box) return;
+    const token = ++commentsToken;
+    head.hidden = true; box.hidden = true;
+    const first = (detail.episodes || [])[0];
+    if (!first || !first.vid) return;
+    const bookId = (detail.meta && detail.meta.novel && detail.meta.novel.book_id) || seriesId;
+    try {
+      const r = await api('/comments', { series_id: seriesId, vid: first.vid, book_id: bookId, limit: 6 });
+      if (token !== commentsToken || detail.seriesId !== seriesId) return;
+      const items = (r && r.items) || [];
+      if (!items.length) return;
+      box.innerHTML = '';
+      const count = $('commentsCount');
+      if (count) count.textContent = items.length + ' 条';
+      items.forEach((it) => {
+        const node = el('div', 'comment-item');
+        const uid = String(it.uid || '');
+        const name = uid ? '用户 ' + uid.slice(-4) : '热心的观众';
+        const initial = name.replace(/[^\u4e00-\u9fa5A-Za-z0-9]/g, '').slice(-1) || '观';
+        const likes = Number(it.likes) || 0;
+        node.innerHTML = `
+          <div class="ci-avatar">${esc(initial)}</div>
+          <div class="ci-body">
+            <div class="ci-head"><span class="ci-name">${esc(name)}</span><span class="ci-date">${esc(it.date || '')}</span></div>
+            <div class="ci-text">${esc(it.text)}</div>
+            <div class="ci-like">♥ ${likes >= 10000 ? fmtCount(likes) : likes}</div>
+          </div>`;
+        box.appendChild(node);
+      });
+      head.hidden = false;
+      box.hidden = false;
+    } catch (e) { /* 热评非核心，失败静默 */ }
+  }
+
+  // 选集分卷：每 50 集一页（参考红果桌面端「第1-50集 / 第51-100集…」）。
+  // 默认打开「正在看」那一集所在的分卷；切剧会重置。
+  const EP_PAGE_SIZE = 50;
+  let epPage = 0;
   function renderEpisodes() {
     const box = $('epGrid');
+    const pages = $('epPages');
     box.innerHTML = '';
+    const eps = detail.episodes || [];
+    if (!eps.length) { pages.hidden = true; return; }
     const hist = records.history()[detail.seriesId];
-    detail.episodes.forEach((ep) => {
+    const pageCount = Math.ceil(eps.length / EP_PAGE_SIZE);
+    // 首次进入定位到观看记录所在分卷，否则沿用当前分卷（但别越界）
+    if (epPage >= pageCount) epPage = 0;
+    if (hist && hist.index && box.dataset.init !== '1') {
+      epPage = Math.min(pageCount - 1, Math.floor((hist.index - 1) / EP_PAGE_SIZE));
+    }
+    box.dataset.init = '1';
+
+    // 分卷标签：>1 页才显示
+    if (pageCount > 1) {
+      pages.hidden = false;
+      pages.innerHTML = '';
+      for (let p = 0; p < pageCount; p++) {
+        const from = p * EP_PAGE_SIZE + 1;
+        const to = Math.min((p + 1) * EP_PAGE_SIZE, eps.length);
+        const tab = el('button', 'ep-page' + (p === epPage ? ' on' : ''), `第${from}-${to}集`);
+        tab.addEventListener('click', () => {
+          epPage = p;
+          renderEpisodes();
+        });
+        pages.appendChild(tab);
+      }
+    } else {
+      pages.hidden = true;
+    }
+
+    const from = epPage * EP_PAGE_SIZE;
+    const slice = eps.slice(from, from + EP_PAGE_SIZE);
+    slice.forEach((ep) => {
       const b = el('button', 'ep', String(ep.index));
       if (hist && hist.index === ep.index) b.classList.add('playing');
       else if (hist && ep.index < hist.index) b.classList.add('watched');
       b.addEventListener('click', () => playEpisode(ep.index));
       box.appendChild(b);
     });
+  }
+
+  /** 播放按钮文案：有观看记录就显示「继续观看第 N 集」，否则「立即播放」。 */
+  function syncPlayBtn() {
+    const btn = $('playFirst');
+    if (!btn) return;
+    const hist = records.history()[detail.seriesId];
+    btn.textContent = hist && hist.index
+      ? `▶ 继续观看第 ${hist.index} 集`
+      : '▶ 立即播放';
   }
 
   function syncFavBtn() {
@@ -2028,7 +2179,8 @@
         node.addEventListener('click', () => {
           hideNextSeason();
           closePlayer();
-          openDetail(r.id, { id: r.id, title: r.title, cover: r.cover }).then(() => playEpisode(1));
+          // 只进入该季详情、展示选集，不直接播放（用户要自己挑集数）
+          openDetail(r.id, { id: r.id, title: r.title, cover: r.cover });
         });
       }
       row.appendChild(node);
@@ -3199,6 +3351,11 @@
   $('playFirst').addEventListener('click', () => {
     const hist = records.history()[detail.seriesId];
     playEpisode(hist ? hist.index : 1);
+  });
+  $('introToggle').addEventListener('click', () => {
+    const intro = $('detailIntro');
+    const open = intro.classList.toggle('open');
+    $('introToggle').textContent = open ? '简介 ▴' : '简介 ▾';
   });
   $('favBtn').addEventListener('click', () => {
     const fav = records.favs();

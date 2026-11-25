@@ -318,6 +318,8 @@ async function detail(seriesId) {
       album_id: String(s.related_album_id || ''),
       season_index: Number(s.season_index || 0),
       is_multi_season: s.is_multi_season === true,
+      content_type: Number(s.content_type || 0),
+      platform: Number(s.platform || 0),
       novel: s.novel || null,
     },
     episodes: eps,

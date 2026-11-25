@@ -92,6 +92,7 @@
         <div class="chips" id="detailChips"></div>
         <div class="hero-actions">
           <button class="btn primary" id="playFirst">▶ 立即播放</button>
+          <button class="btn ghost intro-toggle" id="introToggle" hidden>简介 ▾</button>
           <button class="btn ghost" id="favBtn">收藏</button>
           <button class="btn ghost" id="reserveBtn">预约下一季</button>
         </div>
@@ -99,16 +100,22 @@
     </div>
   </div>
   <p class="intro" id="detailIntro"></p>
+  <div class="section-head">
+    <h2>选集</h2>
+    <span class="muted" id="epCount"></span>
+  </div>
+  <div class="ep-pages" id="epPages" hidden></div>
+  <div class="ep-grid" id="epGrid"></div>
   <div class="section-head seasons-head" id="seasonsHead" hidden>
     <h2>全季 <span class="muted" id="seasonCount"></span></h2>
     <svg class="sh-arrow" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </div>
   <div class="season-list" id="seasonList" hidden></div>
-  <div class="section-head">
-    <h2>选集</h2>
-    <span class="muted" id="epCount"></span>
+  <div class="section-head comments-head" id="commentsHead" hidden>
+    <h2>热评</h2>
+    <span class="muted" id="commentsCount"></span>
   </div>
-  <div class="ep-grid" id="epGrid"></div>
+  <div class="comment-list" id="commentList" hidden></div>
   <div class="section-head recommend-head" id="recommendHead" hidden>
     <h2 id="recommendTitle">相关推荐</h2>
   </div>
