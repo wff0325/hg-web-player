@@ -133,17 +133,20 @@
     };
   }
 
-  /* 热度角标：名次与热度同时显示，不再互相吞掉。
+  /* 热度角标：默认名次与热度同时显示，不再互相吞掉。
+     首页与详情页「短剧推荐」传 { hideRank: true } 只保留热度；
+     搜索、演员作品等其它列表仍显示 TOP 名次。
      score 是榜单自己的推荐值（如「994万推荐」），hot 是红果热度值，两者都保留。 */
-  function badges(d) {
+  function badges(d, opts) {
+    const hideRank = !!(opts && opts.hideRank);
     let s = '';
-    if (d.rank) s += `<span class="badge rank">TOP ${d.rank}</span>`;
+    if (d.rank && !hideRank) s += `<span class="badge rank">TOP ${d.rank}</span>`;
     if (d.hot) s += `<span class="badge heat">🔥 ${esc(d.hot)}</span>`;
     else if (d.score) s += `<span class="badge heat">${esc(d.score)}</span>`;
     return s;
   }
 
-  function card(item) {
+  function card(item, opts) {
     const d = normalize(item);
     const node = el('div', 'card');
     const tags = Array.isArray(d.tags) ? d.tags : [];
@@ -153,7 +156,7 @@
     node.innerHTML = `
       <div class="thumb">
         ${d.cover ? `<img loading="lazy" src="${d.cover}" alt="">` : ''}
-        ${badges(d)}
+        ${badges(d, opts)}
         ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
       </div>
       <div class="name">${d.title}</div>
@@ -176,15 +179,32 @@
   // 榜单状态：content=分类，board=官方榜单 ID
   const rankUI = { content: 'all', board: 'ranklist_hot_play_sc', cursor: '', meta: null };
   const grid = $('grid'), status = $('status'), sentinel = $('sentinel');
+  // seriesId → 内容类别（真人剧/漫剧/AI剧/全部）。卡片经多次 normalize 会丢字段，
+  // 所以用独立映射记录，详情页「短剧推荐」按它选同类热播榜。
+  const cardCategory = new Map();
+  const rememberCategory = (id, content) => {
+    if (!id || !content) return;
+    // 更具体的类别（human/comic/ai/series_album）覆盖笼统的 all；
+    // 同类之间以最新一次为准。首页 banner 先把剧记成 all，后面的分类 tab 要能纠正它。
+    const prev = cardCategory.get(String(id));
+    if (prev !== content && (prev === 'all' || prev === undefined || content !== 'all')) {
+      cardCategory.set(String(id), content);
+    }
+  };
   const homeHero = $('homeHero'), homeSections = $('homeSections'), topicBar = $('topicBar');
   const rankBar = $('rankBar');
   let homeFeedGen = 0;      // 首页增强区的代际，切 tab 时作废旧请求
   let bannerTimer = 0;      // Banner 自动轮播定时器
   let seasonRowCleanup = null; // 全季横滑轨道的事件清理
 
-  /* 把上游条目数组归一成统一结构（Banner / 横滑轨道用） */
-  function toCards(items) {
-    return (Array.isArray(items) ? items : []).map(normalize).filter((d) => d.id && d.title);
+  /* 把上游条目数组归一成统一结构（Banner / 横滑轨道用）。
+     content 传入时记入映射，供详情页「短剧推荐」按同类推荐。 */
+  function toCards(items, content) {
+    return (Array.isArray(items) ? items : []).map(normalize).filter((d) => {
+      if (!d.id || !d.title) return false;
+      if (content) rememberCategory(d.id, content);
+      return true;
+    });
   }
 
   /* 沉浸式背景 Banner：图片作页面顶部背景（向下 mask 渐隐），文案浮在图上。
@@ -253,12 +273,12 @@
     bannerTimer = setInterval(() => { if (!paused && player.hidden) go(idx + 1); }, 5000);
   }
 
-  function hcard(d) {
+  function hcard(d, opts) {
     const c = el('div', 'hcard');
     c.innerHTML = `
       <div class="thumb">
         ${d.cover ? `<img loading="lazy" src="${esc(d.cover)}" alt="">` : ''}
-        ${badges(d)}
+        ${badges(d, opts)}
         ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
       </div>
       <div class="name">${esc(d.title)}</div>`;
@@ -274,7 +294,8 @@
     title.innerHTML = `<h2>${esc(name)}</h2>`
       + (hideMore ? '' : `<span class="more" data-arg="${esc(arg)}">查看更多</span>`);
     const row = el('div', 'hrow');
-    cards.forEach((d) => row.appendChild(hcard(d)));
+    // 首页横滑轨道：用户要求不显示 TOP1/TOP2 名次角标
+    cards.forEach((d) => row.appendChild(hcard(d, { hideRank: true })));
     const more = title.querySelector('.more');
     if (more) more.addEventListener('click', () => switchTab(arg));
     sec.appendChild(title);
@@ -299,7 +320,7 @@
       if (hrow) {
         hrow.innerHTML = '';
         toCards((nr && nr.items || []).map((x) => x.series || x)).slice(0, 10)
-          .forEach((d) => hrow.appendChild(hcard(d)));
+          .forEach((d) => hrow.appendChild(hcard(d, { hideRank: true })));
       }
       row.querySelectorAll('.date-chip').forEach((b) =>
         b.classList.toggle('on', b.dataset.date === String(nr.date || date)));
@@ -321,14 +342,14 @@
         api('/catalog', { channel: 'ai', page: 1, limit: 10, selections: hotSel }).catch(() => null),
       ]);
       if (gen !== homeFeedGen) return;   // 期间切走了视图
-      renderBanner(homeHero, toCards(rank && rank.items));
+      renderBanner(homeHero, toCards(rank && rank.items, 'all'));
       homeSections.innerHTML = '';
       [
-        ['真人剧', 'real', real],
-        ['AI漫剧', 'comic', comic],
-        ['AI短剧', 'ai', ai],
-      ].forEach(([name, arg, data]) => {
-        const row = renderRow(name, arg, toCards(data && data.items).slice(0, 10));
+        ['真人剧', 'real', real, 'human'],
+        ['AI漫剧', 'comic', comic, 'comic_series_rank'],
+        ['AI短剧', 'ai', ai, 'ai_playlet'],
+      ].forEach(([name, arg, data, content]) => {
+        const row = renderRow(name, arg, toCards(data && data.items, content).slice(0, 10));
         if (row) homeSections.appendChild(row);
       });
       // 今日上新：openhongguo SDK newReleases（第四条轨道，带 7 天日期切换）
@@ -629,8 +650,9 @@
         home.items.push(d);
         // 记住这张卡片来自哪个 tab（全部/真人剧/漫剧/AI剧），详情页「短剧推荐」
         // 按同一类别推热度最高的剧（用户要求：看漫剧推漫剧、看真人剧推真人剧）。
-        d.content = (VIEW_RANK[home.view] || {}).content || 'all';
-        const node = card(it);
+        // 注意：card(it) 内部会重新 normalize，不能直接往 d 上挂字段，必须走映射。
+        rememberCategory(d.id, (VIEW_RANK[home.view] || {}).content || 'all');
+        const node = card(it, { hideRank: true });   // 首页列表不显示 TOP 角标
         node._card = d;                        // 题材筛选时按 tags 过滤用
         grid.appendChild(node);
         added += 1;
@@ -1179,9 +1201,12 @@
 
   async function openDetail(seriesId, seed, keepHash) {
     if (!seriesId) return;
-    // 记住入口类别：从哪个 tab 点进来的，「短剧推荐」就按同类推热度最高的
-    if (seed && seed.content) {
-      try { store.set('mr.content.' + seriesId, seed.content); } catch (e) { /* 忽略 */ }
+    // 记住入口类别：从哪个 tab 点进来的，「短剧推荐」就按同类推热度最高的。
+    // 优先 seed 显式带；否则查渲染卡片时记录的映射（normalize 会丢 content 字段）。
+    const fromSeed = seed && seed.content;
+    const fromMap = cardCategory.get(String(seriesId));
+    if (fromSeed || fromMap) {
+      try { store.set('mr.content.' + seriesId, fromSeed || fromMap); } catch (e) { /* 忽略 */ }
     }
     document.body.classList.remove('hero-bg-view');
     if (!keepHash) history.replaceState(null, '', '#/d/' + seriesId);
@@ -1320,7 +1345,11 @@
       if (!items.length) return;
       $('recommendTitle').textContent = '短剧推荐';
       box.innerHTML = '';
-      items.slice(0, 12).forEach((it) => box.appendChild(card(it)));
+      items.slice(0, 12).forEach((it) => {
+        // 推荐卡片继承当前类别，点进去后「短剧推荐」仍是同类
+        rememberCategory(String(it.series_id || it.id), content);
+        box.appendChild(card(it, { hideRank: true }));   // 短剧推荐不显示 TOP 角标
+      });
       head.hidden = false;
       box.hidden = false;
     } catch (e) { /* 推荐非核心，失败静默 */ }

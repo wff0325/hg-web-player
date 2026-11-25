@@ -1,4 +1,4 @@
 {
-  "version": "v2.3.5",
-  "note": "修复演员主页参演作品为空 + 播放器选集分卷。根因：详情页演员 chip 传的是 actor_id（18位，来自 detail 的 client_extra.actor_ids），而 SDK person/personWorks 需要演员榜的 user_id（16位），直接传 actor_id 只会得到占位名+空作品（旧 wasm 也一样，非重打包回归）。查 Go 源码 sdk/person.go + internal/protocol/parse.go 确认演员榜 ranklist_celebrity 同时下发 actor_id/user_id 两个字段。修复：后端 ohg-data 加 celebrities()（缓存30min）+ /sdk/celebrities 路由，前端 openPerson 先用演员榜把 actor_id→user_id 映射（缓存、带 token 防竞态）再取 person/works。实测：陈杨婷丹 actor_id 7521654909997962558→user_id 3414422309317783→30 部作品（暗夜错轨），浏览器点 chip 验证显示 30 部。播放器内选集抽屉也改为每50集分卷（epSheetPages，自动定位当前集、标题显示第N/5页），与详情页一致。自测 232/233（无 ffmpeg）。v2.3.4 详情页改造等均保留。后端常驻 8011。"
+  "version": "v2.3.6",
+  "note": "短剧推荐按内容类别（修复真实点击链路丢失类别）+ TOP 角标按场景控制。根因：首页卡片 card(it) 内部会重新 normalize，外部挂的 d.content 丢失，导致短剧推荐永远拿不到入口 tab 的类别；此前验证还用手动写 localStorage 绕过了真实点击，掩盖了 bug。修复：新增全局 cardCategory 映射 + rememberCategory()，在 toCards / 首页 grid / 推荐卡片渲染时记录 seriesId→类别（具体类别可覆盖 banner 先记下的 all），openDetail 时写入 localStorage.mr.content.<sid>；真实点击验证：真人剧 tab→human、AI漫剧 tab→comic_series_rank。推荐映射 all→ranklist_hot_play_sc、human→human_hot_play、comic_series_rank→comic_series_hot_play、ai_playlet→ai_playlet_hot_play，看漫剧推漫剧、看真人剧推真人剧。TOP 名次角标不再全局去掉：badges(d, opts) 新增 hideRank，仅首页 grid / 首页横滑轨道 / 今日上新 / 详情页短剧推荐传 hideRank:true 隐藏 TOP1/TOP2；搜索结果、演员作品等其它列表仍保留 TOP 角标。后端常驻 8011。自测 232/233（唯一失败=环境无 ffmpeg）。"
 }
