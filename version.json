@@ -1,4 +1,4 @@
 {
-  "version": "v2.3.1",
-  "note": "修复 WASM SDK（vendor/openhongguo 0.4.1）取址：日志「SDK 播放失败…回落 App 链路：openhongguo: anonymous response was empty」的根因是 SDK wasm 里的 SignPlaybackPOST 无条件删掉 x-medusa（PR#25 修正的旧行为），服务端 11-23 起对缺该头的 video_model/v1 回 200/0B，导致每次播放都先失败再回落。因签名逻辑编译在 wasm 内无法直接改，改为在 ohg.js 创建 client 时注入 transport 包装器：拦截 video_model/v1 请求，沿用 SDK 自身设备身份（device_id/iid/cdid/Cookie）用 core/video-model-v1.js 的已验证签名重签后再发，其它请求原样透传。HG_SDK_V1_PATCH_OFF=1 可关闭对照，HG_SDK_DEBUG=1 打重签日志，/health.sdk_v1_patch 显示重签/失败计数。独立实测：改造前 SDK 发 7 个请求全空体；改造后发 3 个、第 3 个 v1 重签后拿到 5 档 bytevc1 + 内容密钥，resolvePlayback 成功；/stream 端到端 HTTP 200 / 4MB video/mp4，服务日志不再出现该 WARN。自测 232/233（唯一失败是环境无 ffmpeg）。v2.3.0 的 PR#25 App 链路重构、去固定设备、缓存本集+后两集均保持不变。后端常驻 8011。"
+  "version": "v2.3.2",
+  "note": "参考 PR N3urda/hongguoTV#114 加 Retry-After 限流退避：上游空 200 响应带 Retry-After 头时是限流（不是签名失效），此时换设备会加重风控，应按服务端给的时间等待再重试。core/video-model-v1.js 新增 PlaybackBackoffError(code=BACKOFF) 与 parseRetryAfter（支持秒数/HTTP日期，钳制 0~10s 防卡死），fetchVideoModelV1 空体时读 Retry-After 抛限流错误；新增 fetchWithBackoff：命中限流则退避后重试本链路一次（不换设备），无 Retry-After 的空体照旧抛错走兜底。app-source.js 主链路改用 fetchWithBackoff。SDK transport 重签路径不改（限流交给 wasm 自己的 retryAttempts 处理）。mock 实测：首次空体+Retry-After:1 → 等待 1s → 第二次成功拿到模型（calls=2）。自测 232/233（唯一失败=环境无 ffmpeg），端到端取址正常。v2.3.1 的 SDK 修复、v2.3.0 的 PR#25 链路/去固定设备/缓存本集+后两集均保持不变。本次只改 Web 端，Android 端未动。后端常驻 8011。"
 }

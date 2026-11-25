@@ -444,7 +444,9 @@ async function loadModel(vid, trace) {
   if (Log.env('HG_VIDEO_MODEL_V1_OFF', null) === null) {
     try {
       const identity = await PlaybackDevice.getPlaybackDevice();
-      const model = await VideoModelV1.fetchVideoModelV1(vid, identity, trace);
+      // 空体带 Retry-After 时限流退避后重试本链路（不换设备），
+      // 无 Retry-After 的空体照旧抛错走后面的兜底链路。
+      const model = await VideoModelV1.fetchWithBackoff(vid, identity, trace);
       const parsed = await rowsFromModel(model, trace);
       if (parsed !== null && parsed.rows.length > 0) fallbackParsed = parsed;
       if (hasPlayable(parsed)) {
