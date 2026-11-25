@@ -23,6 +23,8 @@ const Http = require('../util/http');
 const Json = require('../util/json');
 const Log = require('../util/log');
 const PlaybackDevice = require('./playback-device');
+// PR beilunyang/openhongguo#25：video_model/v1 正式取源（随机匿名设备 + 真 medusa）
+const VideoModelV1 = require('../core/video-model-v1');
 
 /**
  * 播放取址接口（Android v5，v04.10.03 签名）。
@@ -107,7 +109,9 @@ const VERSION_NAME = '7.4.5.32';
 const PLAYBACK_V5_PATH = '/novel/player/multi_video_model/player/v1';
 const PLAYBACK_V5_HOST = 'api5-normal-sinfonlinea.fqnovel.com';
 const PLAYBACK_V5_API = 'https://' + PLAYBACK_V5_HOST + PLAYBACK_V5_PATH;
-const PLAYBACK_V5_UA = 'com.phoenix.read/74332 (Linux; U; Android 14; zh_CN; '
+// PR beilunyang/openhongguo#25：正式取源统一 7.4.5.32 / 74532。
+// 之前 74332 / 7.4.3.32 档配合真机 medusa 对随机注册设备回 200/0B。
+const PLAYBACK_V5_UA = 'com.phoenix.read/74532 (Linux; U; Android 14; zh_CN; '
   + '23127PN0CC; Build/UKQ1.230804.001; Cronet/TTNetVersion:8d40f833 2026-03-03 '
   + 'QuicVersion:21ac1950 2025-11-18)';
 const PLAYBACK_V5_QUERY = {
@@ -119,10 +123,10 @@ const PLAYBACK_V5_QUERY = {
   channel: 'xiaomi_8662_64',
   aid: '8662',
   app_name: 'novelread',
-  version_code: '74332',
-  version_name: '7.4.3.32',
-  manifest_version_code: '74332',
-  update_version_code: '74332',
+  version_code: '74532',
+  version_name: '7.4.5.32',
+  manifest_version_code: '74532',
+  update_version_code: '74532',
   resolution: '1200*2670',
   dpi: '460',
   device_type: '23127PN0CC',
@@ -133,7 +137,7 @@ const PLAYBACK_V5_QUERY = {
   ac: 'wifi',
   host_abi: 'arm64-v8a',
   dragon_device_type: 'phone',
-  pv_player: '74332',
+  pv_player: '74532',
   compliance_status: '0',
   need_personal_recommend: '1',
   player_so_load: '1',
@@ -422,7 +426,8 @@ function payloadCurrent(vid) {
   const out = Json.obj();
   out.biz_param = biz;
   out.mixed_video_id_map = mixed;
-  out.dr_scene = 'player';
+  // PR beilunyang/openhongguo#25：dr_scene 已下放到 preload 预处理，
+  // 正式取源带上它会被判空（device_level=1 + dr_scene=player 回 200/0B）。
   return out;
 }
 
@@ -432,9 +437,31 @@ async function loadModel(vid, trace) {
   let lastErr = null;
   let fallbackParsed = null;
 
-  // 2026-11-24：N3urda/hongguoTV main 当前仍以 currentApp 7.4.5.32 preload/v1
-  // 为主链路；openhongguo v0.4.1 的 player/v1 分支保留为显式探测用，默认不跑，
-  // 避免每次播放先白等两次空响应。
+  // ① 正式主链路（PR beilunyang/openhongguo#25）：video_model/v1 +
+  //    随机匿名设备 + 真机 medusa(369) + 真 Argus/Ladon。
+  //    探针实测随机设备可拿 5 档 bytevc1；这是去掉固定设备后能正常播放的关键。
+  //    用 HG_VIDEO_MODEL_V1_OFF 可关闭本链路（排障对照用）。
+  if (Log.env('HG_VIDEO_MODEL_V1_OFF', null) === null) {
+    try {
+      const identity = await PlaybackDevice.getPlaybackDevice();
+      const model = await VideoModelV1.fetchVideoModelV1(vid, identity, trace);
+      const parsed = await rowsFromModel(model, trace);
+      if (parsed !== null && parsed.rows.length > 0) fallbackParsed = parsed;
+      if (hasPlayable(parsed)) {
+        if (trace !== null && trace !== undefined) trace.route = 'video-model-v1';
+        return parsed;
+      }
+      lastErr = new Error('video_model/v1 未提供可播档位');
+    } catch (e) {
+      lastErr = e;
+      if (trace !== null && trace !== undefined) {
+        trace.v1Error = String((e && e.message) || e);
+      }
+    }
+  }
+
+  // ② 旧主链路（显式探测）：player/v1 + 7.4.5.32 真机 medusa。
+  //    默认不跑，避免白等两次空响应；video_model/v1 不可用时可手工开。
   if (Log.env('HG_PLAYBACK_V5_PROBE', null) !== null) {
     try {
       const model = await fetchPlaybackV5(vid, trace);

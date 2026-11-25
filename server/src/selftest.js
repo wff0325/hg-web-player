@@ -849,43 +849,51 @@ function streamCacheLimit() {
   }
 }
 
-/** 18b. 滚动窗口：只保留本集 + 后两集，窗口外旧缓存被顶替。 */
+/** 18b. 滚动窗口：keepWindow 只刷新活跃集 mtime、不删文件；删除交给 pruneCache LRU。
+ *  2026-11-24 v2.2.1 起语义变更：多设备共用后端时，A 设备换集不能删 B 设备正在看的
+ *  缓存，所以窗口不再执行删除，只把白名单当作「刚观看」刷新 mtime。 */
 function cacheWindow() {
-  section('18b. 缓存滚动窗口（只留本集 + 后两集）');
+  section('18b. 缓存窗口（touch 不删 + LRU 淘汰）');
   let tmp = null;
   try {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hg-window-'));
     const savedDir = process.env.HONGGUO_STREAM_CACHE;
     process.env.HONGGUO_STREAM_CACHE = tmp;
-    const old = new Date(Date.now() - 120000).toISOString();
-
-    // 造 5 集缓存：v1..v5，每集一个成品；v0 是正在下载中的临时文件
+    // 造 5 集缓存：v1..v5，时间戳递增（v1 最旧）；v0 是下载中的临时文件
     for (let i = 1; i <= 5; i++) {
       const p = path.join(tmp, 'v' + i + '_best.play.mp4');
       fs.writeFileSync(p, Buffer.alloc(1024, i));
-      fs.utimesSync(p, new Date(old), new Date(old));
+      // v1 比 v2 更旧 60 秒，保证 LRU 淘汰的是 v1 而不是并列随机挑一个
+      const t = new Date(Date.now() - (6 - i) * 60000);
+      fs.utimesSync(p, t, t);
     }
     const part = path.join(tmp, 'v0_best.part');
     fs.writeFileSync(part, Buffer.from('x'));
 
-    const r = Stream.keepWindow(['v3', 'v4', 'v5'], 1000);
-    check('窗口内三集被保留', r.kept === 3, '保留 ' + r.kept);
-    check('窗口外旧缓存被删（本集+后两集顶替）', r.deleted === 2, '删除 ' + r.deleted);
-    check('释放字节数已统计', r.freed === 2048, '释放 ' + r.freed);
-    check('窗口外的 v1 已删除', !fs.existsSync(path.join(tmp, 'v1_best.play.mp4')), '');
+    const r = Stream.keepWindow(['v3', 'v4', 'v5']);
+    check('窗口内三集被标记活跃', r.kept === 3, '保留 ' + r.kept);
+    check('keepWindow 不删任何文件（多设备互不删）', r.deleted === 0, '删除 ' + r.deleted);
+    check('窗口外旧缓存仍在（v1 不删）', fs.existsSync(path.join(tmp, 'v1_best.play.mp4')), '');
     check('窗口内的 v3 仍在', fs.existsSync(path.join(tmp, 'v3_best.play.mp4')), '');
-    check('下载中的 .part 不被窗口清理删除', fs.existsSync(part), '');
+    check('下载中的 .part 不受影响', fs.existsSync(part), '');
 
-    // 刚落盘的窗口外文件受保护：浏览器可能还没读完，晚一轮再收
-    const fresh = path.join(tmp, 'v9_best.play.mp4');
-    fs.writeFileSync(fresh, Buffer.from('y'));
-    const r2 = Stream.keepWindow(['v3', 'v4', 'v5'], 20000);
-    check('刚写入的窗口外文件本轮不删', fs.existsSync(fresh), '');
-    const r3 = Stream.keepWindow(['v3', 'v4', 'v5'], 0);
-    check('保护窗口设为 0 后旧文件被删', !fs.existsSync(fresh) && r3.deleted === 1, '删除 ' + r3.deleted);
+    // keepWindow 把窗口内 mtime 刷到最新 → LRU 淘汰时最旧的应是窗口外文件
+    const v3mtime = fs.statSync(path.join(tmp, 'v3_best.play.mp4')).mtimeMs;
+    const v1mtime = fs.statSync(path.join(tmp, 'v1_best.play.mp4')).mtimeMs;
+    check('窗口内 mtime 被刷新为最新', v3mtime > v1mtime, 'v3=' + v3mtime + ' v1=' + v1mtime);
 
-    const r4 = Stream.keepWindow([], 0);
-    check('空窗口不做任何删除', r4.deleted === 0, '');
+    // pruneCache 按上限 + LRU 删除：设上限 4，5 集里删掉最旧的 v1
+    const savedMax2 = process.env.HONGGUO_CACHE_MAX_FILES;
+    process.env.HONGGUO_CACHE_MAX_FILES = '4';
+    const deleted = Stream.pruneCache();
+    check('pruneCache 按上限删掉最旧的一集', deleted >= 1, '删除 ' + deleted);
+    check('最旧的窗口外 v1 被 LRU 淘汰', !fs.existsSync(path.join(tmp, 'v1_best.play.mp4')), '');
+    check('刚观看的 v3 未被淘汰', fs.existsSync(path.join(tmp, 'v3_best.play.mp4')), '');
+    if (savedMax2 === undefined) delete process.env.HONGGUO_CACHE_MAX_FILES;
+    else process.env.HONGGUO_CACHE_MAX_FILES = savedMax2;
+
+    const r4 = Stream.keepWindow([]);
+    check('空窗口不做任何操作', r4.deleted === 0, '');
     if (savedDir === undefined) delete process.env.HONGGUO_STREAM_CACHE;
     else process.env.HONGGUO_STREAM_CACHE = savedDir;
   } catch (e) {

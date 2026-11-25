@@ -1227,7 +1227,9 @@ function processMedusaEnv() {
     Pd: 1442983616,
     Lp: '2|520830913092|521433182354|2078052786776|1081701896',
     Fl: '0|0|2523408538|2586339478|997724116|0|0|0|0|606600138',
-    Status: V5.FIELD21,
+    // PR beilunyang/openhongguo#25：真机设备布局的字段 21 必须是 369。
+    // 312 是 N3urda preload/v1 简化布局的值，只适用于 buildMedusaV5。
+    Status: V5.FIELD21_REAL,
   });
   return medusaProcessEnv;
 }

@@ -32,38 +32,14 @@ const KDF_SALT = Buffer.from(
   + 'f49baf7f08e8d68d26a72e37c1a95a2f1f05a51892aef2949732b62a38aadd58', 'hex');
 
 /**
- * 已验证基准播放设备（verified baseline）。
+ * 2026-11-25：去掉内置的固定基准设备，改回随机匿名注册设备。
  *
- * 2026-11-24：上游对「新注册的匿名设备」整体行为风控，一律回 HTTP 200 + 0 字节
- * （本机对 4 条端点 × 312/377 × 番茄短剧通道逐一实测均空）。而一台服务端已放行、
- * 经参考项目 legend0/hongguo-desktop 内置的基准设备实测可正常取址：
- * v5 preload/v1 + field21=312 + 该身份直接返回约 23KB 的完整 video_model。
- * Cookie 非必需（有无都成功），关键在 device_id/iid/cdid 三要素本身。
- *
- * 因此把它作为默认/保底身份：本地无有效持久化身份、或播放空响应需要换身份时，
- * 一律用它，避免反复注册随机设备（既取不到流，又烧注册配额、加重风控）。
- * 来源为公开项目内置常量，非任何用户账号凭据。设 HG_PLAYBASELINE_OFF=1 可关闭。
+ * 之前误以为「新注册设备被上游整体风控」，实际上真正原因是播放请求签名头
+ * 形态不对（缺 x-medusa / 字段21 用了模拟器值）。PR beilunyang/openhongguo#25
+ * 证实：随机匿名设备走 video_model/v1 + 真机 medusa(369) + 真 Argus/Ladon
+ * 可正常取址（本机探针实测 5 档 bytevc1）。所以身份一律走本模块的注册流程，
+ * 落盘复用 + 冷却换身份，不再内置任何固定设备。
  */
-const DEFAULT_VERIFIED_DEVICE = Object.freeze({
-  device_id: '1624456208323876',
-  iid: '1624456208327972',
-  cdid: '91d56f7e-c027-4ce9-9a3c-229d59a13c3b',
-  cookie: 'install_id=1624456208327972; store-region=cn-bj; store-region-src=did',
-});
-
-function baselineEnabled() {
-  return Log.env('HG_PLAYBASELINE_OFF', null) === null;
-}
-
-/** 由基准常量构造一个与落盘身份同形状的不可变对象。 */
-function baselineId() {
-  const b = DEFAULT_VERIFIED_DEVICE;
-  return Object.freeze({
-    device_id: b.device_id, iid: b.iid, cdid: b.cdid,
-    ttreq: '', store_region: 'cn-bj', store_region_src: 'did',
-    cookie: b.cookie, baseline: true,
-  });
-}
 
 let cached = null;          // { device_id, iid, cdid, ttreq, store_region, store_region_src }
 let inflight = null;        // Promise
@@ -102,12 +78,12 @@ function loadCached() {
   if (cached !== null) return cached;
   try {
     const p = storePath();
-    if (!fs.existsSync(p)) return baselineEnabled() ? baselineId() : null;
+    if (!fs.existsSync(p)) return null;
     const j = JSON.parse(fs.readFileSync(p, 'utf8'));
     const device_id = responseId(j, 'device_id');
     const iid = responseId(j, 'iid');
     const cdid = typeof j.cdid === 'string' && j.cdid !== '' ? j.cdid : '';
-    if (!device_id || !iid || !cdid) return baselineEnabled() ? baselineId() : null;
+    if (!device_id || !iid || !cdid) return null;
     const id = {
       device_id, iid, cdid,
       ttreq: typeof j.ttreq === 'string' ? j.ttreq : '',
@@ -227,14 +203,6 @@ async function registerOnce() {
  * @param {boolean} [renew] 传 true 表示上一个身份被上游拒绝，强制换新。
  */
 async function getPlaybackDevice(renew) {
-  // 基准设备模式（默认）：新注册设备已被上游整体风控（200/0B），
-  // 无论初次取址还是空响应换身份，都直接用已验证基准设备，不再烧注册配额。
-  if (baselineEnabled()) {
-    const base = baselineId();
-    cached = base;                 // 保持进程内 identity 视图一致
-    return base;
-  }
-
   if (cached === null) loadCached();          // 重启后先复用磁盘身份
   // renew（换身份）：必须过冷却期，避免每次空响应都注册一台新设备。
   // 冷却期内直接返回旧身份（上游空响应多半不是身份问题，换也没用）。
@@ -263,4 +231,4 @@ async function getPlaybackDevice(renew) {
   return inflight;
 }
 
-module.exports = { getPlaybackDevice, registerOnce, REGISTER_URL, KDF_SALT, DEFAULT_VERIFIED_DEVICE };
+module.exports = { getPlaybackDevice, registerOnce, REGISTER_URL, KDF_SALT };

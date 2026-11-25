@@ -25,6 +25,14 @@ const LICENSE = '646637794';
  */
 const FIELD21 = 312;
 
+/** 真机设备布局的字段 21（PR beilunyang/openhongguo#25，2026-11-25）。
+ *  beilunyang 明确：11-23 起服务端要求播放请求带 x-medusa 且状态字段 21=369
+ *  （真机 SDK 上报值）；377 是模拟器值，会被回 200/0B。随机匿名注册设备配合
+ *  真机布局 369 即可取址，无需内置固定设备。
+ *  仅用于 player/v1 真机 medusa 布局（signPlaybackV5Current）；preload/v1
+ *  + video_tab 的简化布局继续用上面的 FIELD21=312。 */
+const FIELD21_REAL = 369;
+
 /** medusa keyHash 使用的 32 字节协议密钥。 */
 const SIGN_KEY = Crypto.unhex('b23c2a470a20d105dc3f8c4438f8272ed46d6c89ffdcdedd5108698d26e9489d');
 
@@ -53,4 +61,4 @@ const SBOX = Crypto.unhex(
   '1335ae0e178f3409a7803db83892dde5b9b7f0c750e24aef077badd678a09b850b84ec1597e4963cb5e675df1c0d6fb6' +
   '18496ecd76c35c798325590c2fb27a5e');
 
-module.exports = { MAGIC16, LICENSE, FIELD21, SIGN_KEY, SBOX };
+module.exports = { MAGIC16, LICENSE, FIELD21, FIELD21_REAL, SIGN_KEY, SBOX };

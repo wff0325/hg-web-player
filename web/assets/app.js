@@ -1365,11 +1365,11 @@
   }
 
   /**
-   * 看一集就往后预下载 5 集（不含当前集，当前集由正常播放流程下载）。
-   * 窗口 = 本集 + 后 5 集 = 6 个 vid；其中 slice(1) 的 5 集是预热目标。
+   * 看一集就往后预下载 2 集（不含当前集，当前集由正常播放流程下载）。
+   * 窗口 = 本集 + 后两集 = 3 个 vid；其中 slice(1) 的 2 集是预热目标。
    * 缓存淘汰改由后端 LRU（上限 20 个、按观看时间）负责，多设备各看各的不会互相删。
    */
-  const PREWARM_AHEAD = 5;
+  const PREWARM_AHEAD = 2;
   function cacheWindow(fromIndex) {
     const out = [];
     for (let i = fromIndex; i < fromIndex + PREWARM_AHEAD + 1 && i <= detail.episodes.length; i++) {
@@ -1526,8 +1526,8 @@
       keepCacheWindow(windowIds);
       setTimeout(() => {
         if (myWindow !== windowSeq || player.hidden) return;
-        for (const vid of windowIds.slice(1)) prewarm(vid, play.quality);  // 后 5 集
-        prefetchDanmaku(windowIds.slice(1));   // 后 5 集弹幕先拉到内存，换集零等待
+        for (const vid of windowIds.slice(1)) prewarm(vid, play.quality);  // 后两集
+        prefetchDanmaku(windowIds.slice(1));   // 后两集弹幕先拉到内存，换集零等待
         keepCacheWindow(windowIds);            // 预热排队后再标记一次活跃
       }, 3000);
     }
@@ -2690,8 +2690,8 @@
     })(),
     items: [], idx: 0, last: 0, lanes: [], token: 0,
     raf: 0, notice: '',
-    // 内存弹幕缓存：预取后 5 集，换集时命中直接用，不必等接口回来。
-    // 只留最近 8 集（本集 + 后 5 集 + 几集回看），防止长时间追剧内存上涨。
+    // 内存弹幕缓存：随视频预热窗口预取后两集，换集时命中直接用，不必等接口回来。
+    // 只留最近 8 集，防止长时间追剧内存上涨。
     cache: new Map(), awaitMeta: false, awaitMetaAt: 0
   };
   const DM_CACHE_MAX = 8;
@@ -2837,7 +2837,7 @@
     while (dm.cache.size > DM_CACHE_MAX) dm.cache.delete(dm.cache.keys().next().value);
   }
 
-  /** 预取后 5 集弹幕：只写内存缓存，不碰当前正在显示的 dm.items，保证当前集连贯。 */
+  /** 预取后续几集弹幕：只写内存缓存，不碰当前正在显示的 dm.items，保证当前集连贯。 */
   async function prefetchDanmaku(vids) {
     if (!dm.on || !detail.seriesId) return;
     for (const vid of vids || []) {
