@@ -129,7 +129,11 @@
       play: item.play_cnt || item.views || 0,
       tags: item.tags || item.category || [],
       intro: item.abstract || item.intro || item.description || '',
-      rank: item.rank || 0
+      rank: item.rank || 0,
+      // 官方角标（新剧/预告）、榜单升降、平台推荐行
+      tag: item.tag || '',
+      change: item.change || null,
+      promoted: !!item.promoted
     };
   }
 
@@ -141,13 +145,17 @@
     const hideRank = !!(opts && opts.hideRank);
     let s = '';
     if (d.rank && !hideRank) s += `<span class="badge rank">TOP ${d.rank}</span>`;
-    if (d.hot) s += `<span class="badge heat">🔥 ${esc(d.hot)}</span>`;
+    if (d.promoted) s += `<span class="badge promo">平台推荐</span>`;
+    else if (d.hot) s += `<span class="badge heat">🔥 ${esc(d.hot)}</span>`;
     else if (d.score) s += `<span class="badge heat">${esc(d.score)}</span>`;
     return s;
   }
 
   function card(item, opts) {
     const d = normalize(item);
+    // 搜索/演员作品等列表接口本身不带 rank，由调用方按列表顺序补名次；
+    // 首页与短剧推荐走 hideRank 关掉 TOP，不影响其它列表。
+    if (opts && opts.rank) d.rank = opts.rank;
     const node = el('div', 'card');
     const tags = Array.isArray(d.tags) ? d.tags : [];
     // 榜单 score 是「xx万推荐」而非评分，文案跟随上游，不再硬加「评分」前缀
@@ -157,6 +165,7 @@
       <div class="thumb">
         ${d.cover ? `<img loading="lazy" src="${d.cover}" alt="">` : ''}
         ${badges(d, opts)}
+        ${d.tag ? `<span class="badge tag">${esc(d.tag)}</span>` : ''}
         ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
       </div>
       <div class="name">${d.title}</div>
@@ -279,6 +288,7 @@
       <div class="thumb">
         ${d.cover ? `<img loading="lazy" src="${esc(d.cover)}" alt="">` : ''}
         ${badges(d, opts)}
+        ${d.tag ? `<span class="badge tag">${esc(d.tag)}</span>` : ''}
         ${d.eps ? `<span class="ep-tag">${d.eps} 集</span>` : ''}
       </div>
       <div class="name">${esc(d.title)}</div>`;
@@ -906,6 +916,27 @@
         box.appendChild(b);
       });
       box.dataset.init = '1';
+      // 热搜榜：官方角标（新剧/预告）来自这里，点条目直接进详情
+      const rows = (r && r.boards && r.boards[0] && r.boards[0].rows) || [];
+      const hr = $('hotRank');
+      if (hr && rows.length) {
+        hr.innerHTML = `<div class="hr-head"><h3>热搜榜</h3><span>实时</span></div>`
+          + rows.slice(0, 10).map((x, i) => `
+            <div class="hr-item" data-id="${esc(x.series_id || '')}" data-title="${esc(x.title)}">
+              <span class="hr-no${i < 3 ? ' top' : ''}">${i + 1}</span>
+              <span class="hr-t">${esc(x.title)}</span>
+              ${x.tag ? `<span class="hr-tag">${esc(x.tag)}</span>` : ''}
+              <span class="hr-heat">${esc(x.heat || '')}</span>
+            </div>`).join('');
+        hr.querySelectorAll('.hr-item').forEach((node) => {
+          node.addEventListener('click', () => {
+            const id = node.dataset.id;
+            if (id) openDetail(id, { id, title: node.dataset.title });
+            else { $('searchInput').value = node.dataset.title; doSearch(); }
+          });
+        });
+        hr.hidden = false;
+      }
     } catch (e) { /* 保留本地默认热词 */ }
   }
   /* openhongguo SDK searchCues：搜索框提示词轮播（用户没输入、没聚焦时才换） */
@@ -1085,6 +1116,8 @@
     $('searchInput').value = '';
     renderSearchHist();
     $('hotWords').hidden = false;
+    const hr = $('hotRank');
+    if (hr && hr.innerHTML) hr.hidden = false;
     setTimeout(() => $('searchInput').focus(), 120);
   }
 
@@ -1096,6 +1129,7 @@
     renderSearchHist();
     $('searchHist').hidden = true;
     $('hotWords').hidden = true;
+    $('hotRank').hidden = true;
     searchGrid.innerHTML = '';
     searchStatus.innerHTML = '搜索中…';
     renderSearchFilters();
@@ -1108,7 +1142,7 @@
       searchStatus.textContent = items.length
         ? `共 ${items.length} 个结果${fk && searchFilter ? '（' + fk[1] + '）' : ''}`
         : '没有找到相关短剧';
-      items.forEach((it) => searchGrid.appendChild(card(it)));
+      items.forEach((it, i) => searchGrid.appendChild(card(it, { rank: i + 1 })));
     } catch (e) {
       searchStatus.textContent = e.message || '搜索失败';
     }
@@ -1128,21 +1162,50 @@
   // 详情页演员 chip 传的是 actor_id（18位），person/personWorks 需要 user_id（16位）。
   // 用演员榜做 actor_id→user_id 映射（缓存），否则主页永远只显示占位名和空作品。
   let celebMapPromise = null;
+  // 演员榜同时提供 actor_id→user_id 映射和 jpeg 头像。
+  // person 接口返回的头像常是 .heic（浏览器解不了），用演员榜的 .jpeg 兜底。
+  async function celebMap() {
+    if (!celebMapPromise) {
+      celebMapPromise = api('/sdk/celebrities').then((r) => {
+        const ids = new Map(), avatars = new Map(), ranks = new Map();
+        for (const c of ((r && r.items) || [])) {
+          const a = String(c.actor_id || ''), u = String(c.user_id || a);
+          if (a) ids.set(a, u);
+          if (c.avatar) { avatars.set(u, c.avatar); if (a) avatars.set(a, c.avatar); }
+          // 演员榜名次 + 升降（0新上榜/1上升/2下降/3不变）
+          const rk = { position: Number(c.position || 0), change: c.change || null };
+          if (u) ranks.set(u, rk);
+          if (a) ranks.set(a, rk);
+        }
+        return { ids, avatars, ranks };
+      }).catch(() => ({ ids: new Map(), avatars: new Map(), ranks: new Map() }));
+    }
+    return celebMapPromise;
+  }
   async function resolveUserId(id) {
     if (!/^\d+$/.test(String(id))) return String(id);
     try {
-      if (!celebMapPromise) {
-        celebMapPromise = api('/sdk/celebrities').then((r) => {
-          const map = new Map();
-          for (const c of ((r && r.items) || [])) {
-            if (c.actor_id) map.set(String(c.actor_id), String(c.user_id || c.actor_id));
-          }
-          return map;
-        }).catch(() => new Map());
-      }
-      const map = await celebMapPromise;
-      return map.get(String(id)) || String(id);
+      const m = await celebMap();
+      return m.ids.get(String(id)) || String(id);
     } catch (e) { return String(id); }
+  }
+  async function celebAvatar(id) {
+    if (!id) return '';
+    try { return (await celebMap()).avatars.get(String(id)) || ''; } catch (e) { return ''; }
+  }
+  async function celebRank(id) {
+    if (!id) return null;
+    try { return (await celebMap()).ranks.get(String(id)) || null; } catch (e) { return null; }
+  }
+  // 榜单升降：沿用国内习惯，上升红、下降绿、新上榜红、不变灰
+  function rankChangeHtml(ch) {
+    if (!ch || !ch.kind) {
+      if (ch && ch.kind === 0) return '<span class="rc up">新上榜</span>';
+      return '';
+    }
+    if (ch.kind === 1) return `<span class="rc up">↑${ch.places || 0}</span>`;
+    if (ch.kind === 2) return `<span class="rc down">↓${ch.places || 0}</span>`;
+    return '<span class="rc same">—</span>';
   }
 
   async function openPerson(userId, name) {
@@ -1165,15 +1228,34 @@
     try {
       const p = await api('/sdk/person', { user_id: personId });
       if (token !== personToken) return;
+      // person 头像常是 .heic（浏览器不支持），优先用演员榜的 .jpeg；再用 person 里非 heic 的
+      const boardAv = await celebAvatar(realId) || await celebAvatar(userId);
+      const avatar = (boardAv && !/\.heic\b/i.test(boardAv))
+        ? boardAv
+        : (p.avatar && !/\.heic\b/i.test(p.avatar) ? p.avatar : boardAv || p.avatar || '');
       const tags = (Array.isArray(p.tags) ? p.tags : (p.labels || []))
         .map((t) => `<span class="chip">${esc(typeof t === 'string' ? t : (t.name || t.text || ''))}</span>`).join('');
+      const desc = p.description || '';
+      const cr = await celebRank(realId) || await celebRank(userId);
       $('personHead').innerHTML = `
-        <div class="ph-avatar">${p.avatar ? `<img src="${esc(p.avatar)}" alt="">` : '👤'}</div>
-        <div class="ph-info"><h2>${esc(p.name || name || '演员')}</h2>
-          <p>${esc(p.description || '')}</p>
-          <div class="chips">${tags}</div>
-          <div class="ph-stat">粉丝 ${fmtCount(p.followers || 0)} · 获赞 ${fmtCount(p.likes || 0)}</div>
+        <div class="ph-cover"></div>
+        <div class="ph-main">
+          <div class="ph-avatar">${avatar
+            ? `<img src="${esc(avatar)}" alt="" onerror="this.style.display='none';this.parentNode.classList.add('no-img')">`
+            : ''}<span class="ph-fallback">👤</span></div>
+          <div class="ph-info">
+            <h2>${esc(p.name || name || '演员')}</h2>
+            ${cr && cr.position ? `<div class="ph-rank">演员榜第 ${cr.position} 名 ${rankChangeHtml(cr.change)}</div>` : ''}
+            <div class="chips">${tags}</div>
+            <div class="ph-stat">
+              <span><b>${fmtCount(p.followers || 0)}</b> 粉丝</span>
+              <span><b>${fmtCount(p.likes || 0)}</b> 获赞</span>
+            </div>
+            <p class="ph-desc"${desc.length > 90 ? ' data-long="1"' : ''}>${esc(desc)}</p>
+          </div>
         </div>`;
+      const descEl = $('personHead').querySelector('.ph-desc[data-long]');
+      if (descEl) descEl.addEventListener('click', () => descEl.classList.toggle('open'));
     } catch (e) {
       $('personHead').innerHTML = `<div class="ph-info"><h2>${esc(name || '演员')}</h2></div>`;
     }
@@ -1188,7 +1270,9 @@
       const r = await api('/sdk/person-works', { user_id: uid, cursor: personCursor, limit: 30 });
       if (uid !== personId) return;
       const grid = $('personGrid');
-      (r.items || []).forEach((it) => grid.appendChild(card(it)));
+      // 作品接口不带 rank，按列表顺序补 TOP 名次；翻页时接着上一页累加
+      const baseRank = grid.children.length;
+      (r.items || []).forEach((it, i) => grid.appendChild(card(it, { rank: baseRank + i + 1 })));
       personCursor = String(r.cursor || r.next_offset || '');
       $('personCount').textContent = grid.children.length ? `${grid.children.length} 部` : '';
       $('personStatus').innerHTML = r.has_more && personCursor

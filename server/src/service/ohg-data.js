@@ -68,6 +68,13 @@ function toRankItem(it, i) {
   if (it && it.score !== undefined) row.score = String(it.score);
   if (src.play_count !== undefined) row.play_cnt = Number(src.play_count || 0);
   if (it && it.copyright) row.copyright = String(it.copyright);
+  // 官方角标（新剧/预告）、榜单升降、平台推荐行：SDK 有值就原样透传，
+  // 前端按需展示；没有就保持 undefined，不占字段。
+  if (it && it.tag) row.tag = String(it.tag);
+  if (it && it.change && typeof it.change === 'object') {
+    row.change = { kind: Number(it.change.kind || 0), places: Number(it.change.places || 0) };
+  }
+  if (it && it.promoted) row.promoted = true;
   return row;
 }
 
@@ -236,12 +243,28 @@ async function hotSearch() {
   const h = await Ohg.hotSearch();
   const flat = (arr) => (Array.isArray(arr) ? arr : []).map((x) =>
     (typeof x === 'string' ? x : (x.word || x.text || x.title || ''))).filter((s) => s !== '');
+  // rows 保留官方角标（新剧/预告）与名次；items 继续给字符串，兼容旧调用方。
+  const rows = (arr) => (Array.isArray(arr) ? arr : []).map((x) => {
+    if (typeof x === 'string') return { title: x };
+    return {
+      title: String(x.title || x.word || x.text || ''),
+      series_id: String(x.series_id || ''),
+      tag: x.tag ? String(x.tag) : '',
+      position: Number(x.position || 0),
+      heat: String(x.heat || ''),
+      score: String(x.search_score || ''),
+    };
+  }).filter((x) => x.title);
   return {
     guesses: flat(h && h.guesses),
-    boards: (h && Array.isArray(h.boards) ? h.boards : []).map((b) => ({
-      name: String(b.name || b.title || ''),
-      items: flat(b.items || b.words || b.list),
-    })),
+    boards: (h && Array.isArray(h.boards) ? h.boards : []).map((b) => {
+      const list = rows(b.items || b.words || b.list);
+      return {
+        name: String(b.name || b.title || ''),
+        items: list.map((x) => x.title),
+        rows: list,
+      };
+    }),
   };
 }
 
@@ -593,6 +616,10 @@ async function celebrities() {
     actor_id: String(it.actor_id || ''), user_id: String(it.user_id || ''),
     name: String(it.actor || ''), avatar: String(it.avatar_url || ''),
     score: String(it.score || ''), position: Number(it.position || 0),
+    // 演员榜的名次变动（0新上榜/1上升/2下降/3不变）
+    change: it.change && typeof it.change === 'object'
+      ? { kind: Number(it.change.kind || 0), places: Number(it.change.places || 0) }
+      : null,
   }));
   celebritiesCache = { items, count: items.length };
   celebritiesAt = Date.now();
