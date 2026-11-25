@@ -601,7 +601,8 @@ class Server {
       const filters = Object.prototype.hasOwnProperty.call(FILTER_MAP, fk)
         ? [FILTER_MAP[fk]] : [];
       const m = Json.obj();
-      const pg = await OhgData.search(query, searchLimit || 40, filters);
+      // fast=1：联想补封面用，只取 1 页，别把首屏拖到十几秒
+      const pg = await OhgData.search(query, searchLimit || 20, filters, q.fast === '1');
       m.query = pg.query;
       m.count = pg.count;
       m.results = pg.results;

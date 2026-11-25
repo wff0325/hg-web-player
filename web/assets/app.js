@@ -729,6 +729,8 @@
   }
 
   /* ---------------- 我的 ---------------- */
+  const ICON_USER = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="currentColor"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7z" fill="currentColor"/></svg>';
+
   function renderMine() {
     const hist = records.history();
     const fav = records.favs();
@@ -737,28 +739,107 @@
     const favs = Object.values(fav).sort((a, b) => b.ts - a.ts).slice(0, 12);
     const resvs = Object.keys(resv).map((sid) => Object.assign({ id: sid }, resv[sid]))
       .sort((a, b) => (b.at || 0) - (a.at || 0));
+    const allHist = Object.values(hist);
+    const totalEp = allHist.reduce((n, r) => n + (Number(r.index) || 0), 0);
     grid.innerHTML = '';
     status.textContent = '';
     const wrap = el('div', 'mine');
     wrap.style.gridColumn = '1 / -1';
     wrap.innerHTML = `
-      <div class="mine-tools">
-        <button class="text-btn light" id="clearCacheBtn" title="清空全部观看记录，并清理已缓存的视频">清空历史记录</button>
-        <button class="text-btn light" id="resetDeviceBtn" title="更换匿名播放设备，取址失败时可点这里">更换播放设备</button>
+      <div class="mine-hero">
+        <div class="mh-glow"></div>
+        <div class="mh-main">
+          <div class="mh-avatar">${ICON_USER}</div>
+          <div class="mh-info">
+            <h2>我的片单</h2>
+            <div class="mh-stats">
+              <span><b>${allHist.length}</b>部看过</span>
+              <span><b>${totalEp}</b>集</span>
+              <span><b>${favs.length}</b>部收藏</span>
+              <span><b>${resvs.length}</b>部预约</span>
+            </div>
+          </div>
+        </div>
       </div>
-      <h2>我的预约${resvs.length ? ' <span class="mine-count">' + resvs.length + '</span>' : ''}</h2>
-      <div class="mini-list" id="reserveList">${resvs.length ? '' : '<div class="empty">还没有预约。在剧集详情页点「预约下一季」，下一季上线时首页会提醒你</div>'}</div>
-      <h2>继续观看</h2>
-      <div class="mini-list" id="historyList">${rows.length ? '' : '<div class="empty">还没有观看记录</div>'}</div>
-      <h2>我的收藏</h2>
-      <div class="mini-list" id="favList">${favs.length ? '' : '<div class="empty">还没有收藏</div>'}</div>`;
+      <div class="mine-tabs" id="mineTabs">
+        <button class="mt on" data-tab="history">继续观看${allHist.length ? `<i>${allHist.length}</i>` : ''}</button>
+        <button class="mt" data-tab="fav">我的收藏${favs.length ? `<i>${favs.length}</i>` : ''}</button>
+        <button class="mt" data-tab="resv">我的预约${resvs.length ? `<i>${resvs.length}</i>` : ''}</button>
+      </div>
+      <div class="mine-panel" data-panel="history"><div class="mini-list" id="historyList"></div></div>
+      <div class="mine-panel" data-panel="fav" hidden><div class="mini-list" id="favList"></div></div>
+      <div class="mine-panel" data-panel="resv" hidden><div class="mini-list" id="reserveList"></div></div>
+      <div class="mine-settings">
+        <div class="ms-head">设置</div>
+        <button class="ms-row" id="cacheRow">
+          <span>播放缓存</span><span class="ms-val" id="cacheVal">读取中…</span>
+        </button>
+        <button class="ms-row" id="clearCacheBtn">
+          <span>清空观看历史</span><span class="ms-arrow">›</span>
+        </button>
+        <button class="ms-row" id="resetDeviceBtn">
+          <span>更换播放设备</span><span class="ms-arrow">›</span>
+        </button>
+        <div class="ms-row static"><span>版本</span><span class="ms-val" id="verVal">—</span></div>
+      </div>`;
     const reserveList = wrap.querySelector('#reserveList');
     const historyList = wrap.querySelector('#historyList');
     const favList = wrap.querySelector('#favList');
-    resvs.forEach((r) => reserveList.appendChild(reserveRow(r)));
-    rows.forEach((r) => historyList.appendChild(miniRow(r, true)));
-    favs.forEach((r) => favList.appendChild(miniRow(r, false)));
+    if (resvs.length) resvs.forEach((r) => reserveList.appendChild(reserveRow(r)));
+    else reserveList.innerHTML = '<div class="empty">还没有预约。在详情页点「预约下一季」，下一季上线时会提醒你</div>';
+    if (rows.length) rows.forEach((r) => historyList.appendChild(miniRow(r, true)));
+    else historyList.innerHTML = '<div class="empty">还没有观看记录，去首页挑一部吧</div>';
+    if (favs.length) favs.forEach((r) => favList.appendChild(miniRow(r, false)));
+    else favList.innerHTML = '<div class="empty">还没有收藏，详情页点「收藏」即可加入</div>';
     grid.appendChild(wrap);
+
+    // Tab 切换：三个列表不再垂直堆叠
+    const tabs = wrap.querySelector('#mineTabs');
+    if (tabs) {
+      tabs.addEventListener('click', (ev) => {
+        const b = ev.target.closest('.mt');
+        if (!b) return;
+        tabs.querySelectorAll('.mt').forEach((x) => x.classList.toggle('on', x === b));
+        wrap.querySelectorAll('.mine-panel').forEach((p) => {
+          p.hidden = p.dataset.panel !== b.dataset.tab;
+        });
+      });
+    }
+
+    // 缓存占用：读一次 /cache/info，点一下可清理
+    const cacheVal = $('cacheVal');
+    const cacheRow = $('cacheRow');
+    const loadCache = async () => {
+      try {
+        const c = await api('/cache/info', {});
+        const mb = Number(c.mb || 0);
+        if (cacheVal) cacheVal.textContent = c.files
+          ? `${mb.toFixed(mb >= 100 ? 0 : 1)} MB · ${c.files} 个`
+          : '暂无缓存';
+      } catch (e) { if (cacheVal) cacheVal.textContent = '读取失败'; }
+    };
+    loadCache();
+    if (cacheRow) {
+      cacheRow.addEventListener('click', async () => {
+        if (cacheVal) cacheVal.textContent = '清理中…';
+        const qs = new URLSearchParams({ all: '1', api_key: KEY });
+        if (SHARE) qs.set('sharecode', SHARE);
+        try {
+          const r = await fetch(`${API}/cache/delete?${qs.toString()}`);
+          const j = await r.json().catch(() => null);
+          toast(j && j.freed_mb ? `已清理 ${j.freed_mb}MB 缓存` : '缓存已清理');
+        } catch (e) { toast('清理失败，稍后再试'); }
+        loadCache();
+      });
+    }
+
+    // 版本号
+    const verVal = $('verVal');
+    if (verVal) {
+      api('/version', {}).then((v) => { verVal.textContent = v.display || v.version || '—'; })
+        .catch(() => { verVal.textContent = '—'; });
+    }
+
     const rd = $('resetDeviceBtn');
     if (rd) {
       rd.addEventListener('click', async () => {
@@ -807,11 +888,16 @@
     // 用文字按钮，不说「解密缓存」这种技术黑话：历史叫「删除」，收藏叫「取消收藏」
     const delText = withProgress ? '删除' : '取消收藏';
     const delTitle = withProgress ? '删除这条观看记录' : '取消收藏';
+    // 继续观看显示进度条，一眼看出看到哪了
+    const pct = withProgress && r.eps
+      ? Math.max(2, Math.min(100, Math.round((Number(r.index) || 0) / Number(r.eps) * 100)))
+      : 0;
     node.innerHTML = `
       <img loading="lazy" src="${esc(r.cover)}" alt="">
       <div class="info">
         <div class="t">${esc(r.title)}</div>
         <div class="s">${sub}</div>
+        ${pct ? `<div class="mini-progress"><i style="width:${pct}%"></i></div>` : ''}
       </div>
       <div class="go">${withProgress ? '继续' : '播放'}</div>
       <button class="row-del" aria-label="${delTitle}" title="${delTitle}">${delText}</button>`;
@@ -1078,17 +1164,19 @@
         if (seq !== suggestSeq) return;
         words = (r && r.items) || [];
       } catch (e) { /* 回落 /search */ }
-      if (words.length) {
-        renderTextSuggest(words);
-        return;
-      }
-      const qs = new URLSearchParams({ q, limit: 8, api_key: KEY });
+      // 先出文字联想（快），不 return：接着补带封面的卡片结果，
+      // 回来就替换成缩略图版，用户能直接看到剧集封面。
+      if (words.length) renderTextSuggest(words);
+      const qs = new URLSearchParams({ q, limit: 6, api_key: KEY, fast: '1' });
       if (SHARE) qs.set('sharecode', SHARE);
       const res = await fetch(`${API}/search?${qs.toString()}`, { signal: suggestAbort.signal });
       if (seq !== suggestSeq) return;
       const data = await res.json();
       if (seq !== suggestSeq) return;
-      renderSuggest(data.results || [], q);
+      const items = data.results || [];
+      // 有带封面的结果才替换；否则保留文字联想，别把列表清空
+      if (items.length) renderSuggest(items, q);
+      else if (!words.length) renderSuggest([], q);
     } catch (e) {
       if (e && e.name === 'AbortError') return;
       if (seq === suggestSeq) renderSuggest([], q);

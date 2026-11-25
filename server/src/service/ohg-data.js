@@ -111,15 +111,16 @@ async function allEpisodes(seriesId, limit) {
 }
 
 /** 搜索分页：用 searchAll 去重翻页，凑够 limit。 */
-async function searchItems(query, limit, filters) {
+async function searchItems(query, limit, filters, fast) {
   const cap = limit > 0 ? limit : 20;
   const out = [];
   const opts = {};
   if (Array.isArray(filters) && filters.length > 0) opts.filters = filters;
   const raw = [];
   // 上游搜索翻页极慢（实测 10条3.6s / 20条7.3s / 30条11.2s，第4页单页就要20s，
-  // 40条要31.5s），用户会以为搜索卡死。限制 2 页（约20条）把首屏压到 7s 内。
-  for await (const s of Ohg.searchAll(String(query), opts, { maxPages: 2 })) {
+  // 40条要31.5s），用户会以为搜索卡死。限制 2 页（约20条）把首屏压到 7s 内；
+  // fast=1（联想补封面）只取 1 页，尽快出带封面的卡片。
+  for await (const s of Ohg.searchAll(String(query), opts, { maxPages: fast ? 1 : 2 })) {
     raw.push(s);
     if (raw.length >= cap) break;
   }
@@ -227,8 +228,8 @@ function withRank(items, rankOffset) {
 
 /* ---------------- 搜索 / 发现 ---------------- */
 
-async function search(query, limit, filters) {
-  const items = await searchItems(query, limit, filters);
+async function search(query, limit, filters, fast) {
+  const items = await searchItems(query, limit, filters, fast);
   return {
     query: String(query),
     count: items.length,
