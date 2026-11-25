@@ -512,6 +512,8 @@ class Server {
       const free = Stream.diskFreeBytes();
       m.disk_free_mb = free === null ? null : Math.round(free / 1048576);
       m.sdk_cache = Ohg.cacheStats();
+      // PR#25 SDK 取址修复：重签 video_model/v1 的次数（0 失败才算健康）
+      m.sdk_v1_patch = Ohg.patchInfo ? Ohg.patchInfo() : null;
       Res.json(req, res, 200, m);
       return;
     }

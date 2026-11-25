@@ -17,6 +17,10 @@ const path = require('path');
 const fs = require('fs');
 const Config = require('../util/config');
 const Log = require('../util/log');
+// PR beilunyang/openhongguo#25 修复：SDK 的 video_model/v1 请求在 wasm 里
+// 无条件删掉了 x-medusa，服务端自 11-23 起对缺该头的播放请求回 200/0B。
+// 用已验证的签名实现在 transport 层重签这一条请求（不改 wasm）。
+const VideoModelV1 = require('../core/video-model-v1');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const ENTRY = path.join(ROOT, 'vendor', 'openhongguo', 'index.js').replace(/\\/g, '/');
@@ -27,6 +31,63 @@ const DISK_CACHE = path.join(ROOT, 'server', 'config', 'ohg-cache.json');
 
 let clientPromise = null;
 let sdkModule = null;
+const patchStats = { patched: 0, failed: 0 };
+
+/**
+ * 构造带 PR#25 修复的 transport。
+ *
+ * SDK 的 wasm 里 SignPlaybackPOST 无条件 delete("x-medusa")（v0.4.1 的旧行为），
+ * 而服务端 11-23 起要求 video_model/v1 必须带 x-medusa（真机布局、字段21=369），
+ * 否则一律 200/0B。这里在请求发出前把这条请求用已验证的签名重签：
+ *  - 端点固定为 video_model/v1；
+ *  - 身份沿用 SDK 自己请求里的 device_id/iid/cdid/Cookie（与档案一致）；
+ *  - 已独立探针实测：重签后 SDK resolvePlayback 拿到 5 档 bytevc1 + 内容密钥。
+ * 其它请求（目录/搜索/注册/player/v1）原样透传，不受影响。
+ * HG_SDK_V1_PATCH_OFF=1 可关闭该修复做对照。
+ */
+function patchedTransport(base) {
+  if (Log.env('HG_SDK_V1_PATCH_OFF', null) !== null) return base;
+  return async (req) => {
+    const isV1 = /\/novel\/player\/video_model\/v1\//.test(String(req.url || ''));
+    if (!isV1) return base(req);
+    try {
+      const q = new URL(String(req.url)).searchParams;
+      let vid = q.get('video_id');
+      if (!vid) {
+        try {
+          const bodyObj = JSON.parse(Buffer.from(req.body || []).toString('utf8'));
+          vid = bodyObj.video_id;
+        } catch (e) { /* 下面用兜底 vid */ }
+      }
+      if (!vid) return base(req);   // 拿不到 vid 就不改，交给 SDK 原样处理
+      const identity = {
+        device_id: q.get('device_id') || '',
+        iid: q.get('iid') || '',
+        cdid: q.get('cdid') || '',
+        cookie: req.headers && (req.headers.Cookie || req.headers.cookie) || '',
+      };
+      if (!identity.device_id || !identity.iid) return base(req);
+      const rebuilt = VideoModelV1.buildRequest(String(vid), identity, Date.now());
+      patchStats.patched++;
+      const out = await base({
+        url: rebuilt.url, method: 'POST', headers: rebuilt.headers, body: rebuilt.body,
+      });
+      if (Log.env('HG_SDK_DEBUG', null) !== null) {
+        Log.info('SDK video_model/v1 已按 PR#25 重签 vid=' + vid
+          + ' did=' + identity.device_id + ' bytes=' + (out.body ? out.body.length : 0));
+      }
+      return out;
+    } catch (e) {
+      // 重签失败不要打断 SDK：回退到原请求，由 SDK 自己的重试机制处理
+      patchStats.failed++;
+      Log.warn('SDK video_model/v1 重签失败，回退原请求：' + (e && e.message ? e.message : e));
+      return base(req);
+    }
+  };
+}
+
+/** SDK 取址修复统计（供 /health 或诊断）。 */
+function patchInfo() { return Object.assign({}, patchStats); }
 
 /** 懒加载 SDK：首次调用时加载 wasm 并创建 client，之后复用。 */
 async function getClient() {
@@ -37,6 +98,7 @@ async function getClient() {
       fs.mkdirSync(path.dirname(PROFILE), { recursive: true });
       const client = await sdk.createClient({
         profile: sdk.fileProfileStore(PROFILE),
+        transport: patchedTransport(sdk.nodeTransport({ timeoutMs: 30000 })),
         retryAttempts: 3,
         deviceResets: 2,
         timeoutMs: 30000,
@@ -275,6 +337,7 @@ module.exports = Object.assign({}, api, {
   resetDevice,
   cacheStats,
   cacheClear,
+  patchInfo,
   profilePath: PROFILE,
   methods: METHODS.concat(GENERATORS),
 });
