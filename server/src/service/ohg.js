@@ -43,10 +43,15 @@ const patchStats = { patched: 0, failed: 0 };
  *  - 身份沿用 SDK 自己请求里的 device_id/iid/cdid/Cookie（与档案一致）；
  *  - 已独立探针实测：重签后 SDK resolvePlayback 拿到 5 档 bytevc1 + 内容密钥。
  * 其它请求（目录/搜索/注册/player/v1）原样透传，不受影响。
- * HG_SDK_V1_PATCH_OFF=1 可关闭该修复做对照。
+ *
+ * 2026-11-25 起 vendor 的 wasm 已用 J3n5en/openhongguo@fix/playback-medusa
+ * 重新打包（SDK 原生在 video_model/v1 上签 x-medusa，真机布局字段21=369），
+ * 不再需要本补丁，故默认关闭。仅当新 SDK 取址失败时，设 HG_SDK_V1_PATCH_ON=1
+ * 可临时开启旧重签兜底；HG_SDK_V1_PATCH_OFF 仍可强制关闭二者做对照。
  */
 function patchedTransport(base) {
   if (Log.env('HG_SDK_V1_PATCH_OFF', null) !== null) return base;
+  if (Log.env('HG_SDK_V1_PATCH_ON', null) === null) return base; // 新 SDK 已自带修复，默认不重签
   return async (req) => {
     const isV1 = /\/novel\/player\/video_model\/v1\//.test(String(req.url || ''));
     if (!isV1) return base(req);

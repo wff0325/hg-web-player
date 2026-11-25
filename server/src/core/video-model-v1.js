@@ -28,36 +28,6 @@ const Http = require('../util/http');
 const Json = require('../util/json');
 const Pure = require('./pure-sign');
 const Sign = require('./playback-signature');
-const Safeguards = require('./safeguards');
-
-/**
- * 上游限流错误：响应是空 200，但带 Retry-After 头。
- * 与「x-medusa 无效导致的空体」区分开——限流时换设备只会加重风控，
- * 必须按服务端给的时间退避。PR N3urda/hongguoTV#114 就是靠这个头区分的。
- */
-class PlaybackBackoffError extends Error {
-  constructor(retryAfterMs, raw) {
-    super('video_model/v1 限流（Retry-After=' + raw + '）');
-    this.name = 'PlaybackBackoffError';
-    this.code = 'BACKOFF';
-    this.retryAfterMs = retryAfterMs;
-  }
-}
-
-/** 解析 Retry-After（秒数或 HTTP 日期），钳制到 [0, 10s]，拿不到返回 null。 */
-function parseRetryAfter(raw) {
-  if (raw === null || raw === undefined || String(raw).trim() === '') return null;
-  const s = String(raw).trim();
-  let ms = null;
-  if (/^\d+$/.test(s)) {
-    ms = parseInt(s, 10) * 1000;
-  } else {
-    const t = Date.parse(s);
-    if (!Number.isNaN(t)) ms = t - Date.now();
-  }
-  if (ms === null || !Number.isFinite(ms) || ms < 0) return 0;
-  return Math.min(ms, 10000);   // 上游可能给几十秒，别把请求卡死；上限 10s
-}
 
 const BASE = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/video_model/v1/';
 const V5 = require('./v5-constants');
@@ -192,38 +162,9 @@ async function fetchVideoModelV1(vid, identity, trace) {
     trace.v1.bytes = res.body.length;
   }
   if (res.status !== 200) throw new Error('video_model/v1 HTTP ' + res.status);
-  if (res.body.length === 0) {
-    // PR N3urda/hongguoTV#114：空 200 带 Retry-After 是限流，不是签名失效。
-    // 限流时换设备只会加重风控，必须退避等待，由上层按 retryAfterMs 重试本链路。
-    const retryAfter = res.header('Retry-After') || res.header('retry-after');
-    const ms = parseRetryAfter(retryAfter);
-    if (retryAfter !== null && retryAfter !== '') {
-      if (trace !== null && trace !== undefined) trace.v1.backoffMs = ms;
-      throw new PlaybackBackoffError(ms, retryAfter);
-    }
-    throw new Error('video_model/v1 空响应（x-medusa 可能被判无效）');
-  }
+  if (res.body.length === 0) throw new Error('video_model/v1 空响应（x-medusa 可能被判无效）');
   const j = Json.parseObject(res.text());
   return modelFrom(j, String(vid));
 }
 
-/**
- * 取模型，遇到 Retry-After 限流时按服务端时间退避后重试一次（不换设备）。
- * 空体且无 Retry-After（签名问题）直接抛，交给上层换设备/走兜底。
- */
-async function fetchWithBackoff(vid, identity, trace) {
-  try {
-    return await fetchVideoModelV1(vid, identity, trace);
-  } catch (e) {
-    if (!e || e.code !== 'BACKOFF') throw e;
-    const ms = e.retryAfterMs || 0;
-    if (trace !== null && trace !== undefined) trace.v1.retried = true;
-    if (ms > 0) await Safeguards.sleep(ms);
-    return fetchVideoModelV1(vid, identity, trace);
-  }
-}
-
-module.exports = {
-  fetchVideoModelV1, fetchWithBackoff, buildRequest, modelFrom, BASE,
-  PlaybackBackoffError, parseRetryAfter,
-};
+module.exports = { fetchVideoModelV1, buildRequest, modelFrom, BASE };
